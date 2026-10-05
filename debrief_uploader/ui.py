@@ -440,9 +440,31 @@ def open_settings(app):
         from tkinter import filedialog, ttk
 
         s = app.s
-        r = _root("Debrief Uploader - settings", 620, 720)
-        outer = tk.Frame(r, bg=BG)
-        outer.pack(fill="both", expand=True, padx=16, pady=14)
+        r = _root("Debrief Uploader - settings", 640, 720)
+        # The sections are taller than a 720 px window once Windows display
+        # scaling applies (a tester at 150% saw it end at the review checkbox,
+        # Save and Startup cut off, so nothing he changed was kept). The body
+        # scrolls, the window fits the screen, and every change saves itself.
+        r.geometry("640x%d" % max(480, min(900, r.winfo_screenheight() - 120)))
+        foot = tk.Frame(r, bg=BG)
+        foot.pack(side="bottom", fill="x", padx=16, pady=(4, 12))
+        canvas = tk.Canvas(r, bg=BG, highlightthickness=0)
+        vbar = tk.Scrollbar(r, orient="vertical", command=canvas.yview)
+        canvas.configure(yscrollcommand=vbar.set)
+        vbar.pack(side="right", fill="y")
+        canvas.pack(side="left", fill="both", expand=True)
+        outer = tk.Frame(canvas, bg=BG)
+        win = canvas.create_window((16, 14), window=outer, anchor="nw")
+        outer.bind("<Configure>", lambda e: canvas.configure(
+            scrollregion=(0, 0, e.width + 32, e.height + 28)))
+        canvas.bind("<Configure>", lambda e: canvas.itemconfigure(
+            win, width=max(200, e.width - 32)))
+
+        def _wheel(e):
+            canvas.yview_scroll(int(-e.delta / 120) or (-1 if e.delta > 0 else 1), "units")
+        r.bind_all("<MouseWheel>", _wheel)
+
+        status = _label(foot, "Changes save as you make them.", size=9, fg=MUTED)
 
         # ---- account ----
         acc = _section(outer, "Account")
@@ -489,12 +511,14 @@ def open_settings(app):
                         s[key].append(d)
                         s["_dirs_pinned"] = True
                         lst.insert("end", d)
+                        save_now()
 
             def remove():
                 for i in reversed(lst.curselection()):
                     s[key].pop(i)
                     lst.delete(i)
                 s["_dirs_pinned"] = True
+                save_now()
 
             row = tk.Frame(box, bg=PANEL)
             row.pack(anchor="w", padx=12, pady=(0, 11))
@@ -538,7 +562,7 @@ def open_settings(app):
 
         review = tk.BooleanVar(value=bool(s.get("review_mode")))
         tk.Checkbutton(up, text="Ask me before every upload (review mode)",
-                       variable=review, bg=PANEL, fg=INK, selectcolor=BG,
+                       variable=review, command=lambda: save_now(), bg=PANEL, fg=INK, selectcolor=BG,
                        activebackground=PANEL, activeforeground=INK,
                        font=("Segoe UI", 9)).pack(anchor="w", padx=9)
         _label(up, "Worth turning on for your first session, so you can watch "
@@ -596,11 +620,8 @@ def open_settings(app):
             auto_msg.configure(text="Only available on Windows.")
         auto_msg.pack(anchor="w", padx=12, pady=(0, 11))
 
-        # ---- save ----
-        status = _label(outer, "", size=9, fg=MUTED)
-        status.pack(anchor="w", pady=(2, 6))
-
-        def save():
+        # ---- saving: every change, as it happens ----
+        def save_now(*_):
             s["visibility"] = next(v for lbl, v in VISIBILITY
                                    if lbl == vis.get()) or None
             s["training_visibility"] = next(
@@ -610,17 +631,29 @@ def open_settings(app):
                 s["shot_max_age_hours"] = max(1, int(age.get()))
                 s["shot_min_kb"] = max(0, int(minkb.get()))
             except ValueError:
-                status.configure(text="Those numbers need to be whole numbers.",
-                                 fg="#f0a173")
+                status.configure(text="Those numbers need to be whole numbers; "
+                                      "everything else is saved.", fg="#f0a173")
+                s.save()
                 return
             s.save()
             app.log.info("settings saved")
             status.configure(text="Saved.", fg=AMBER)
 
-        row = tk.Frame(outer, bg=BG)
-        row.pack(fill="x")
-        _button(row, "Save", save, primary=True).pack(side="left")
-        _button(row, "Close", r.destroy).pack(side="left", padx=6)
+        vis.trace_add("write", save_now)
+        tvis.trace_add("write", save_now)
+        for sp in (age, minkb):
+            sp.configure(command=save_now)
+            sp.bind("<FocusOut>", save_now)
+            sp.bind("<Return>", save_now)
+
+        def close():
+            save_now()
+            r.unbind_all("<MouseWheel>")
+            r.destroy()
+
+        r.protocol("WM_DELETE_WINDOW", close)
+        status.pack(side="left")
+        _button(foot, "Done", close, primary=True).pack(side="right")
         r.mainloop()
 
     _thread(build, app.log, "the settings window")

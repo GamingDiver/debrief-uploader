@@ -274,6 +274,44 @@ class TestWindowsBuild(unittest.TestCase):
         self.assertEqual(done, [])
         self.assertIn("redirect not allowed", seen["msg"])
 
+    def test_settings_changes_survive_closing_with_the_x(self):
+        """Tester 2026-10-05: changed visibility + review mode, closed the
+        window, reopened: both were back to the defaults (Save was below the
+        visible area at 150% scaling). Every change now saves itself."""
+        import tkinter as tk
+        from debrief_uploader import config
+        real_root = self._real_root
+
+        def walk(w):
+            yield w
+            for c in w.winfo_children():
+                yield from walk(c)
+
+        def root(title, w, h):
+            r = real_root(title, w, h)
+
+            def act():
+                # the review-mode checkbox, clicked as a user would
+                cb = next(x for x in walk(r) if isinstance(x, tk.Checkbutton)
+                          and "review mode" in x.cget("text"))
+                cb.invoke()
+                # the visibility menu: set the variable the OptionMenu drives
+                om = next(x for x in walk(r) if x.winfo_class() == "TMenubutton")
+                r.globalsetvar(om.cget("textvariable"), "Private - only me")
+                # close with the window's X, not a button
+                r.tk.call(r.protocol("WM_DELETE_WINDOW"))
+            r.after(150, act)
+            # never hang the suite if the close path is broken
+            r.after(4000, lambda: r.winfo_exists() and r.destroy())
+            return r
+
+        self.ui._root = root
+        self.ui.open_settings(self.app)
+        self.assertEqual(self.errors, [])
+        fresh = config.Settings.load()     # re-read from disk
+        self.assertEqual(fresh.get("visibility"), "private")
+        self.assertTrue(fresh.get("review_mode"))
+
     def test_review_window_title_matches_its_contents(self):
         """It used to say "needs you" over a window saying nothing needs you."""
         titles = []
