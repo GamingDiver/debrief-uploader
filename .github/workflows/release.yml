@@ -1,0 +1,29 @@
+name: release
+# Push a tag like v1.3.1 (matching debrief_uploader/__version__) to publish
+# DebriefUploader.zip as a GitHub Release. package.sh refuses to build unless
+# the tests, the window tests and a run of the unpacked zip all pass.
+on:
+  push:
+    tags: ["v*"]
+permissions:
+  contents: write
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Tag matches the app version
+        run: |
+          v="$(python3 -c 'import debrief_uploader; print(debrief_uploader.__version__)')"
+          [ "v$v" = "${GITHUB_REF_NAME}" ] || { echo "tag ${GITHUB_REF_NAME} != version v$v"; exit 1; }
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: sudo apt-get update -qq && sudo apt-get install -y -qq xvfb zip
+      - run: python3 -m pip install -r requirements.txt
+      - name: Build (tests gate the zip)
+        run: xvfb-run -a bash package.sh "$PWD/DebriefUploader.zip"
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "${GITHUB_REF_NAME}" DebriefUploader.zip --title "Debrief Uploader ${GITHUB_REF_NAME}" --generate-notes
