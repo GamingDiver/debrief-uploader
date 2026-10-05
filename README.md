@@ -32,11 +32,13 @@ You need Windows 10 or 11, the game, and a free
 
 ### 1. Install Python (one time)
 
-1. Download Python 3.9 or newer from
-   [python.org/downloads](https://www.python.org/downloads/).
-2. Run the installer and, on its first screen, **tick "Add python.exe to
-   PATH"** before clicking *Install Now*. Without it the uploader cannot find
-   Python.
+1. Go to [python.org/downloads/windows](https://www.python.org/downloads/windows/)
+   and, under the newest *Stable Release*, download the **standalone
+   "Windows installer (64-bit)"**. Not the big *Download Python install
+   manager* button on the main downloads page: that installer has no "Add
+   to PATH" option.
+2. Run it and, on its first screen, **tick "Add python.exe to PATH"** before
+   clicking *Install Now*. Without it the uploader cannot find Python.
 
 ### 2. Download the uploader
 

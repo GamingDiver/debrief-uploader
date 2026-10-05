@@ -27,10 +27,24 @@ PROVIDERS = ("google", "discord")
 LOOPBACK_PORTS = (53682, 53683, 53684)
 
 
+class _Server(http.server.HTTPServer):
+    # HTTPServer turns SO_REUSEADDR on, and on Windows that lets a second
+    # socket bind a port someone else already holds -- the sign-in reply
+    # could then reach the other listener. Exclusive use, so a taken port
+    # fails and _listen moves on to the next one.
+    allow_reuse_address = False
+
+    def server_bind(self):
+        import socket
+        if hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
+            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        super().server_bind()
+
+
 def _listen():
     for port in LOOPBACK_PORTS + (0,):
         try:
-            return http.server.HTTPServer(("127.0.0.1", port), _Handler)
+            return _Server(("127.0.0.1", port), _Handler)
         except OSError:
             continue
     raise ApiError("oauth", "could not open a local port for the sign-in reply")
