@@ -10,6 +10,21 @@ Legends keeps only your ~10 most recent battles and silently deletes the rest;
 this copies every new one somewhere safe the moment it appears, before it does
 anything else.
 
+## How to use it
+
+Once it is installed and signed in, there is nothing else to do between
+battles:
+
+1. **Play the game as normal.**
+2. **At the post-game screens, take a screenshot of each of the first two
+   tabs**, *Personal* and *Team Result* (Steam `F12`, or `Win`+`PrtScn`).
+   Capture the whole screen, not a dragged box.
+3. **The Debrief Uploader automatically detects your replay and screenshots
+   and uploads them** for review on
+   [GamingDiver Debrief](https://gamingdiver.com/wowslegends/replays/). The
+   link to each battle appears under **Ready for review** in the tray icon's
+   **Status...** window.
+
 ## Install
 
 You need Windows 10 or 11, the game, and a free
@@ -139,12 +154,13 @@ python -m debrief_uploader login      sign in (--email for email + password)
 python -m debrief_uploader logout     sign out and forget the tokens
 ```
 
-Play as normal. At the results screen, capture the **Personal** and **Team
-Result** tabs (Steam `F12`, or `Win`+`PrtScn`). That's it — the pairing and the
-upload happen on their own.
+Day to day, follow [How to use it](#how-to-use-it): play, screenshot the
+first two post-game tabs, and the pairing and the upload happen on their own.
 
 **Capture the whole screen, not a dragged box.** The site reads the scoreboard
-off your screenshot, and a cropped region loses the rows at the bottom.
+off your screenshot, and a cropped region loses the rows at the bottom. If you
+forget the screenshots, the battle still uploads once the replay is 15 minutes
+old; only the scorecard-checked figures are missing.
 
 ## What it does, in order
 
