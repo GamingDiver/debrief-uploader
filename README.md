@@ -42,7 +42,14 @@ You need Windows 10 or 11, the game, and a free
 
 1. Download `DebriefUploader.zip` from the
    [latest release](https://github.com/GamingDiver/debrief-uploader/releases/latest).
-2. Unzip it somewhere **permanent**, for example
+2. **Unblock the zip before you unzip it.** Windows marks every file
+   downloaded from the internet, and on PCs with **Smart App Control** turned
+   on it then refuses to run the launcher outright ("Smart App Control
+   blocked a file that may be unsafe", with no *Run anyway* button).
+   Right-click `DebriefUploader.zip` -> **Properties** -> at the bottom of the
+   *General* tab, tick **Unblock** -> **OK**. Unblocking the zip first clears
+   every file inside it in one go.
+3. Unzip it somewhere **permanent**, for example
    `C:\Users\<you>\Documents\DebriefUploader`. Not your Downloads folder and
    not inside the zip preview: Windows will start it from this folder at every
    logon, so it must not move or be cleaned up later.
@@ -50,8 +57,15 @@ You need Windows 10 or 11, the game, and a free
 ### 3. Start it
 
 1. Open the unzipped folder and **double-click `Start-DebriefUploader.cmd`**.
-2. If Windows shows *"Windows protected your PC"*, click **More info**, then
-   **Run anyway**. This appears for any script downloaded from the internet.
+2. If Windows still stops it:
+   - *"Smart App Control blocked a file that may be unsafe"*: the zip was
+     not unblocked. Click **OK**, then right-click
+     `Start-DebriefUploader.cmd` -> **Properties** -> tick **Unblock** ->
+     **OK**, and double-click it again. (Or unblock the whole folder at once:
+     open PowerShell in the folder and run
+     `Get-ChildItem -Recurse | Unblock-File`.)
+   - *"Windows protected your PC"* (SmartScreen): click **More info**, then
+     **Run anyway**.
 3. The first run takes about a minute: it builds its own private Python
    environment and finds your replay and screenshot folders. Then the black
    window closes and a **diver icon appears in the system tray** (bottom
