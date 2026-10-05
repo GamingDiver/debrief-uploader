@@ -33,7 +33,8 @@ echo "== packaging =="
 find . -name '__pycache__' -type d -exec rm -rf {} + 2>/dev/null || true
 rm -f "$OUT"
 ( cd .. && zip -qr "$OUT" debrief-uploader \
-    -x '*__pycache__*' '*.pyc' '*.DS_Store' '*/.tmp-home*' '*/DebriefUploader.zip' )
+    -x '*__pycache__*' '*.pyc' '*.DS_Store' '*/.tmp-home*' '*/DebriefUploader.zip' \
+       'debrief-uploader/.git/*' 'debrief-uploader/.github/*' 'debrief-uploader/.gitignore' )
 
 echo "== verifying the zip actually runs =="
 TMP="$(mktemp -d)"
