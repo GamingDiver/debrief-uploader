@@ -146,3 +146,75 @@ class TestOAuthLoopback(unittest.TestCase):
             for h in held:
                 h.server_close()
 
+
+class TestOAuthRoundTrip(unittest.TestCase):
+    """The browser's reply must be exchanged for a session, promptly.
+
+    Regression, 2026-10-05: the listener ran serve_forever() on a thread and
+    handle_request() on the caller; the thread answered the browser while the
+    caller waited out the full timeout, so the code was never exchanged.
+    """
+
+    def _run(self, paths, timeout=20):
+        import threading
+        import time
+        import urllib.parse
+        import urllib.request
+        from debrief_uploader import oauth
+        calls = []
+
+        def fake_open(url):
+            redirect = urllib.parse.parse_qs(urllib.parse.urlparse(url).query)["redirect_to"][0]
+            base = redirect.rsplit("/", 1)[0]
+
+            def hit():
+                time.sleep(0.2)
+                for pth in paths:
+                    try:
+                        urllib.request.urlopen(base + pth, timeout=5).read()
+                    except Exception:
+                        pass
+            threading.Thread(target=hit, daemon=True).start()
+            return True
+
+        def fake_request(method, url, body, headers):
+            calls.append(url)
+            return 200, {}, json.dumps({"access_token": "a", "refresh_token": "r",
+                                        "expires_in": 3600,
+                                        "user": {"id": "u", "email": "e@x"}}).encode()
+
+        class Client:
+            key = "k"
+            session = None
+
+            def _absorb(self, j):
+                self.session = j
+
+        real = (oauth.webbrowser.open, oauth._request)
+        oauth.webbrowser.open, oauth._request = fake_open, fake_request
+        try:
+            t0 = time.time()
+            c = Client()
+            oauth.sign_in_browser(c, "google", timeout=timeout)
+            return time.time() - t0, calls, c
+        finally:
+            oauth.webbrowser.open, oauth._request = real
+
+    def test_code_is_exchanged_without_waiting_out_the_timeout(self):
+        took, calls, c = self._run(["/cb?code=AUTH"])
+        self.assertLess(took, 5)
+        self.assertEqual(len(calls), 1)
+        self.assertIn("grant_type=pkce", calls[0])
+        self.assertEqual(c.session["access_token"], "a")
+
+    def test_a_stray_request_first_does_not_eat_the_reply(self):
+        took, calls, _ = self._run(["/favicon.ico", "/cb?code=AUTH"])
+        self.assertLess(took, 5)
+        self.assertEqual(len(calls), 1)
+
+    def test_an_error_reply_is_reported(self):
+        from debrief_uploader.api import ApiError
+        with self.assertRaises(ApiError) as cm:
+            self._run(["/cb?error=access_denied&error_description=User+cancelled"])
+        self.assertIn("User cancelled", cm.exception.message)
+

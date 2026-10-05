@@ -242,6 +242,7 @@ def open_sign_in(app, on_done=None):
         result = {}
 
         def finish_ok():
+            r.lift()
             app.log.info("signed in as %s" % (app.client.session.email or ""))
             app.eng.unblock()
             if on_done:
@@ -275,7 +276,9 @@ def open_sign_in(app, on_done=None):
                     return
                 for b_ in prov_buttons:
                     b_.configure(state="normal")
+                app.log.error("browser sign-in failed: %s" % result["err"])
                 msg.configure(text=result["err"], fg="#f0a173")
+                r.lift()                 # it is behind the browser by now
             r.after(300, poll)
 
         for provider in oauth.PROVIDERS:
