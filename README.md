@@ -10,22 +10,96 @@ Legends keeps only your ~10 most recent battles and silently deletes the rest;
 this copies every new one somewhere safe the moment it appears, before it does
 anything else.
 
-## Download
-
-Get `DebriefUploader.zip` from the
-[latest release](https://github.com/GamingDiver/debrief-uploader/releases/latest)
-and unzip it anywhere.
-
 ## Install
 
-Needs Python 3.9+ ([python.org](https://www.python.org/downloads/) — during
-setup, **tick "Add python.exe to PATH"**).
+You need Windows 10 or 11, the game, and a free
+[GamingDiver](https://gamingdiver.com) account to upload to.
 
-**Double-click `Start-DebriefUploader.cmd`.** The first run builds its own
-Python environment and finds your folders; then it puts an icon in your system
-tray and **the window closes**. Everything after that lives in the tray icon.
+### 1. Install Python (one time)
 
-Click the tray icon and choose **Sign in...** to finish setup.
+1. Download Python 3.9 or newer from
+   [python.org/downloads](https://www.python.org/downloads/).
+2. Run the installer and, on its first screen, **tick "Add python.exe to
+   PATH"** before clicking *Install Now*. Without it the uploader cannot find
+   Python.
+
+### 2. Download the uploader
+
+1. Download `DebriefUploader.zip` from the
+   [latest release](https://github.com/GamingDiver/debrief-uploader/releases/latest).
+2. Unzip it somewhere **permanent**, for example
+   `C:\Users\<you>\Documents\DebriefUploader`. Not your Downloads folder and
+   not inside the zip preview: Windows will start it from this folder at every
+   logon, so it must not move or be cleaned up later.
+
+### 3. Start it
+
+1. Open the unzipped folder and **double-click `Start-DebriefUploader.cmd`**.
+2. If Windows shows *"Windows protected your PC"*, click **More info**, then
+   **Run anyway**. This appears for any script downloaded from the internet.
+3. The first run takes about a minute: it builds its own private Python
+   environment and finds your replay and screenshot folders. Then the black
+   window closes and a **diver icon appears in the system tray** (bottom
+   right; click the `^` arrow if it is hidden).
+4. Click the tray icon and choose **Sign in...**. Nothing uploads until you
+   have signed in.
+
+Double-clicking the launcher again is safe: if it is already running, the
+second copy just exits.
+
+### 4. Start it in the background with Windows
+
+So you never have to remember to start it before playing.
+
+**Recommended: one click in Settings**
+
+Tray icon -> **Settings...** -> under **Startup**, tick **Start
+automatically when I log in**. It takes effect the moment you tick it (the
+line underneath confirms "will start when you log in").
+
+That's it. From then on it starts silently when you log in to Windows: no
+window, not even a flash, just the diver icon in the tray. It registers a
+per-user scheduled task named *GamingDiver Debrief Uploader* (no admin rights
+needed), and the checkbox always shows whether that task really exists. Untick
+it to stop. (`Install-Uploader.ps1` does the same from PowerShell.)
+
+**Alternative: the Startup folder**
+
+If you would rather manage startup apps yourself, a shortcut in your Startup
+folder works too:
+
+1. Press `Win`+`R`, type `shell:startup`, press Enter. Your personal Startup
+   folder opens.
+2. In a second Explorer window, open the uploader folder, **right-click
+   `Start-DebriefUploader.cmd`** and choose **Show more options -> Create
+   shortcut** (Windows 11) or **Create shortcut** (Windows 10).
+3. Drag the new shortcut into the Startup folder.
+4. Right-click the shortcut in the Startup folder -> **Properties** -> set
+   **Run** to **Minimized** -> OK, so logon shows no black window.
+
+Or create the same shortcut by running this in PowerShell **from inside the
+uploader folder**:
+
+```powershell
+$s = (New-Object -ComObject WScript.Shell).CreateShortcut("$([Environment]::GetFolderPath('Startup'))\Debrief Uploader.lnk")
+$s.TargetPath = "$PWD\Start-DebriefUploader.cmd"; $s.WorkingDirectory = "$PWD"; $s.WindowStyle = 7; $s.Save()
+```
+
+To undo it, delete the shortcut (or switch it off under *Settings -> Apps ->
+Startup*).
+
+Using both is harmless: the second copy sees the first and exits.
+
+Either way, check it worked by signing out of Windows and back in: the diver
+icon should appear in the tray on its own.
+
+### Updating
+
+Quit from the tray icon, unzip the new release **over the same folder**, and
+start it again. Your sign-in, settings and upload history live in
+`%LOCALAPPDATA%\GamingDiver\DebriefUploader`, not in the app folder, so they
+carry over, and the Startup shortcut keeps working because the folder did not
+move.
 
 ### The tray icon
 
@@ -39,8 +113,8 @@ Click the tray icon and choose **Sign in...** to finish setup.
 | **Check now** | don't wait out the poll interval |
 | **Pause / Resume**, **Quit** | |
 
-**Start automatically at logon** is a checkbox in Settings. (The older
-`Install-Uploader.ps1` still works and does the same thing from PowerShell.)
+**Start automatically when I log in** is a checkbox in Settings; see
+[Start it in the background with Windows](#4-start-it-in-the-background-with-windows).
 
 **To build a standalone `.exe`** that needs no Python at all — run this *on the
 Windows PC*, since PyInstaller bundles the interpreter of the machine it runs
@@ -171,23 +245,20 @@ the standard library.
 ## Development
 
 ```
-python -m unittest discover -s tests
-```
-
-The matching engine is pure logic with no I/O, so the whole of it is testable
-without a game, a PC, or a network. `tests/test_corpus_timing.py` additionally
-replays the real archive's battle cadence through it when the archive is
-present, and `tests/test_images.py` checks the scorecard transform against the
-arithmetic extracted from the site's own `js/replay-upload.js` — so if the site
-changes its crop, the test fails instead of the OCR quietly drifting.
-
-## Development
-
-```
 pip install -r requirements.txt
 python -m unittest discover -s tests
 bash package.sh          # tests, window tests, then builds DebriefUploader.zip
 ```
+
+The matching engine is pure logic with no I/O, so the whole of it is testable
+without a game, a PC, or a network. `tests/test_corpus_timing.py` additionally
+replays a real archive's battle cadence through it when one is present
+(`~/WowsLegendsReplayArchive`). `tests/test_images.py` checks the scorecard
+transform against the arithmetic in the site's own upload code; those
+browser-parity cases run when `GD_SITE_JS` points at the site's
+`js/replay-upload.js` (GamingDiver's deploy runs them on every site change),
+so if the site changes its crop, a test fails instead of the OCR quietly
+drifting.
 
 Releases are built by GitHub Actions: bump `__version__` in
 `debrief_uploader/__init__.py`, then push a matching tag (`v1.3.2`).
