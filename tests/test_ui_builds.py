@@ -212,6 +212,68 @@ class TestWindowsBuild(unittest.TestCase):
         self.assertEqual(self.errors, [])
         self.assertIn("def456", seen["text"])
 
+    def _click_provider(self, provider, outcome):
+        """Open the sign-in window, press 'Sign in with <provider>', and report
+        what the window did. oauth.sign_in_browser is faked: no browser."""
+        import tkinter as tk
+        from debrief_uploader import oauth
+        from debrief_uploader.api import ApiError
+        calls, done, seen = [], [], {}
+        real_sib = oauth.sign_in_browser
+
+        def fake_sib(client, prov="discord", timeout=300):
+            calls.append(prov)
+            if outcome != "ok":
+                raise ApiError("oauth", outcome)
+            return client.session
+
+        real_root = self._real_root
+
+        def root(title, w, h):
+            r = real_root(title, w, h)
+
+            def press():
+                btns = [w_ for w_ in r.winfo_children()[0].winfo_children()[1].winfo_children()
+                        if isinstance(w_, tk.Button)]
+                seen["labels"] = [b_.cget("text") for b_ in btns]
+                next(b_ for b_ in btns if provider.title() in b_.cget("text")).invoke()
+
+            def check():
+                if not r.winfo_exists():
+                    return
+                labels = [w_ for w_ in r.winfo_children()[0].winfo_children()
+                          if isinstance(w_, tk.Label)]
+                seen["msg"] = " ".join(l.cget("text") for l in labels)
+                seen["open"] = True
+                r.destroy()
+            r.after(100, press)
+            r.after(1500, check)
+            return r
+
+        oauth.sign_in_browser = fake_sib
+        self.ui._root = root
+        try:
+            self.ui.open_sign_in(self.app, on_done=lambda: done.append(1))
+        finally:
+            oauth.sign_in_browser = real_sib
+        return calls, done, seen
+
+    def test_sign_in_offers_google_and_discord(self):
+        """Google/Discord accounts have no password (Greg 2026-10-05)."""
+        calls, done, seen = self._click_provider("google", "ok")
+        self.assertEqual(self.errors, [])
+        self.assertIn("Sign in with Google", seen["labels"])
+        self.assertIn("Sign in with Discord", seen["labels"])
+        self.assertEqual(calls, ["google"])
+        self.assertEqual(done, [1])            # signed in -> window closed
+        self.assertNotIn("open", seen)
+
+    def test_browser_sign_in_failure_is_shown_not_swallowed(self):
+        calls, done, seen = self._click_provider("discord", "redirect not allowed")
+        self.assertEqual(calls, ["discord"])
+        self.assertEqual(done, [])
+        self.assertIn("redirect not allowed", seen["msg"])
+
     def test_review_window_title_matches_its_contents(self):
         """It used to say "needs you" over a window saying nothing needs you."""
         titles = []

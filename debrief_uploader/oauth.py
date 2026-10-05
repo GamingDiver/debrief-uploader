@@ -4,10 +4,12 @@ The app never sees a password: it opens the system browser, the user signs in
 with the same account they use on the site, and the authorization code comes
 back to a listener on 127.0.0.1.
 
-REQUIRES a server-side allowlist entry for the loopback redirect URL in the
-project's Auth settings. Until that exists, use `login --email` instead; this
-module raises a clear error rather than hanging on a redirect that will never
-be accepted.
+REQUIRES the loopback redirect in the site's Auth allowlist (Supabase ->
+Authentication -> URL Configuration -> Redirect URLs): http://127.0.0.1:*/cb,
+or the exact LOOPBACK_PORTS below. The listener takes the first free one of
+those ports so an exact allowlist works too; a random port is only the last
+resort. Without the entry Supabase sends the browser to the site instead, and
+this raises a clear error after the timeout rather than hanging.
 """
 import base64
 import hashlib
@@ -22,6 +24,16 @@ from . import config
 from .api import ApiError, _json, _request
 
 PROVIDERS = ("google", "discord")
+LOOPBACK_PORTS = (53682, 53683, 53684)
+
+
+def _listen():
+    for port in LOOPBACK_PORTS + (0,):
+        try:
+            return http.server.HTTPServer(("127.0.0.1", port), _Handler)
+        except OSError:
+            continue
+    raise ApiError("oauth", "could not open a local port for the sign-in reply")
 
 
 def _verifier():
@@ -63,7 +75,7 @@ def sign_in_browser(client, provider="discord", timeout=300):
         raise ApiError("bad_provider", "provider must be one of: %s"
                        % ", ".join(PROVIDERS))
     _Handler.code = _Handler.error = None
-    srv = http.server.HTTPServer(("127.0.0.1", 0), _Handler)
+    srv = _listen()
     port = srv.server_address[1]
     redirect = "http://127.0.0.1:%d/cb" % port
 
@@ -91,10 +103,10 @@ def sign_in_browser(client, provider="discord", timeout=300):
         raise ApiError("oauth", _Handler.error)
     if not _Handler.code:
         raise ApiError("oauth",
-                       "no sign-in came back. If the browser showed a redirect "
-                       "error, the loopback URL still needs to be added to the "
-                       "site's allowed redirect list -- use 'login --email' "
-                       "in the meantime.")
+                       "no sign-in came back from the browser. If it landed on "
+                       "gamingdiver.com instead of a 'Signed in' page, the "
+                       "site does not allow this app's sign-in redirect yet; "
+                       "email + password still works meanwhile.")
 
     body = json.dumps({"auth_code": _Handler.code,
                        "code_verifier": verifier}).encode()

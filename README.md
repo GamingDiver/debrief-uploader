@@ -70,8 +70,15 @@ You need Windows 10 or 11, the game, and a free
    environment and finds your replay and screenshot folders. Then the black
    window closes and a **diver icon appears in the system tray** (bottom
    right; click the `^` arrow if it is hidden).
-4. Click the tray icon and choose **Sign in...**. Nothing uploads until you
-   have signed in.
+4. Click the tray icon and choose **Sign in...**, then sign in the same way
+   you do on gamingdiver.com:
+   - **Sign in with Google** or **Sign in with Discord** if that is how you
+     made your account (most people). Your browser opens; sign in there, and
+     when it says *Signed in* you can close the tab. The uploader never sees
+     your Google or Discord password.
+   - **Email and password** only if your account has a password.
+
+   Nothing uploads until you have signed in.
 
 Double-clicking the launcher again is safe: if it is already running, the
 second copy just exits.
@@ -192,7 +199,7 @@ python -m debrief_uploader status     what it has seen and uploaded
 python -m debrief_uploader review     resolve anything it wasn't sure about
 python -m debrief_uploader run        watch and upload (add --tray for the tray icon)
 python -m debrief_uploader setup      show or set the folders it watches
-python -m debrief_uploader login      sign in (--email for email + password)
+python -m debrief_uploader login      sign in in the browser (--provider google|discord, or --email)
 python -m debrief_uploader logout     sign out and forget the tokens
 ```
 

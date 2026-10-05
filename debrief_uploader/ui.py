@@ -9,7 +9,7 @@ cannot open must not become a dead end.
 import os
 import threading
 
-from . import autostart, config
+from . import autostart, config, oauth
 from .api import ApiError
 
 BG = "#0b1620"
@@ -227,11 +227,65 @@ def _version():
 def open_sign_in(app, on_done=None):
     def build():
         import tkinter as tk
-        r = _root("Sign in to GamingDiver", 420, 250)
+        r = _root("Sign in to GamingDiver", 420, 380)
         pad = tk.Frame(r, bg=BG)
         pad.pack(fill="both", expand=True, padx=18, pady=16)
         _label(pad, "Use the same account as gamingdiver.com.", fg=MUTED,
-               size=9).pack(anchor="w", pady=(0, 12))
+               size=9).pack(anchor="w", pady=(0, 10))
+
+        # Most accounts were made with Google or Discord and have no password
+        # (Greg 2026-10-05: "I used Google as my signin so I do not have an
+        # email/password"), so the browser sign-in comes first.
+        prov = tk.Frame(pad, bg=BG)
+        prov.pack(fill="x", pady=(0, 10))
+        prov_buttons = []
+        result = {}
+
+        def finish_ok():
+            app.log.info("signed in as %s" % (app.client.session.email or ""))
+            app.eng.unblock()
+            if on_done:
+                on_done()
+            r.destroy()
+
+        def browser(provider):
+            for b_ in prov_buttons:
+                b_.configure(state="disabled")
+            msg.configure(text="Your browser opened: sign in with %s there, "
+                               "then come back here." % provider.title(), fg=MUTED)
+            result.clear()
+
+            def work():
+                try:
+                    oauth.sign_in_browser(app.client, provider)
+                    result["ok"] = True
+                except ApiError as e:
+                    result["err"] = e.message
+                except Exception as e:   # a dead window must not be the result
+                    result["err"] = "sign-in failed (%s)" % e
+
+            threading.Thread(target=work, daemon=True).start()
+
+            def poll():
+                if not result:
+                    r.after(300, poll)
+                    return
+                if result.get("ok"):
+                    finish_ok()
+                    return
+                for b_ in prov_buttons:
+                    b_.configure(state="normal")
+                msg.configure(text=result["err"], fg="#f0a173")
+            r.after(300, poll)
+
+        for provider in oauth.PROVIDERS:
+            bt = _button(prov, "Sign in with %s" % provider.title(),
+                         lambda p_=provider: browser(p_), primary=True)
+            bt.pack(fill="x", pady=(0, 6))
+            prov_buttons.append(bt)
+
+        _label(pad, "Or with email and password:", fg=MUTED, size=9).pack(
+            anchor="w", pady=(4, 6))
 
         _label(pad, "Email", size=9).pack(anchor="w")
         email = tk.Entry(pad, bg=PANEL, fg=INK, insertbackground=INK,
@@ -257,16 +311,12 @@ def open_sign_in(app, on_done=None):
             except ApiError as e:
                 msg.configure(text=e.message, fg="#f0a173")
                 return
-            app.log.info("signed in as %s" % (app.client.session.email or ""))
-            app.eng.unblock()
-            if on_done:
-                on_done()
-            r.destroy()
+            finish_ok()
 
         pw.bind("<Return>", submit)
         row = tk.Frame(pad, bg=BG)
         row.pack(fill="x")
-        _button(row, "Sign in", submit, primary=True).pack(side="left")
+        _button(row, "Sign in", submit).pack(side="left")
         _button(row, "Cancel", r.destroy).pack(side="left", padx=6)
         email.focus_set()
         r.mainloop()

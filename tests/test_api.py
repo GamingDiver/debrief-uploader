@@ -122,3 +122,27 @@ class TestOverwriteDetection(unittest.TestCase):
 
     def test_not_found_is_not(self):
         self.assertFalse(api._is_overwrite_refusal(404, b"{}"))
+
+
+class TestOAuthLoopback(unittest.TestCase):
+    """The redirect must land on a port the site's allowlist can name."""
+
+    def test_prefers_the_fixed_ports(self):
+        from debrief_uploader import oauth
+        srv = oauth._listen()
+        try:
+            self.assertIn(srv.server_address[1], oauth.LOOPBACK_PORTS)
+        finally:
+            srv.server_close()
+
+    def test_falls_through_when_a_port_is_taken(self):
+        from debrief_uploader import oauth
+        held = [oauth._listen()]
+        try:
+            nxt = oauth._listen()
+            held.append(nxt)
+            self.assertNotEqual(nxt.server_address[1], held[0].server_address[1])
+        finally:
+            for h in held:
+                h.server_close()
+
