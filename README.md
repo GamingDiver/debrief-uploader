@@ -62,7 +62,35 @@ You need Windows 10 or 11, the game, and a free
 Double-clicking the launcher again is safe: if it is already running, the
 second copy just exits.
 
-### 4. Start it in the background with Windows
+### 4. Choose who can see your battles
+
+Before your first battle, decide who can watch what you upload: tray icon ->
+**Settings...** -> **Uploads** -> **Visibility for new uploads**.
+
+| Setting | Who can watch the battle |
+|---|---|
+| **Public** (the default) | Anyone with the link, and it is listed in the Debrief community list. Your gamertag and your fleet's name show on it. |
+| **Fleet** | Only signed-in members of your fleet. |
+| **Private** | Only you. |
+| **Use my site default** | Whatever you chose on the [Debrief page](https://gamingdiver.com/wowslegends/replays/) under *Visibility for new uploads*. That is **Public** unless you changed it. |
+
+Good to know:
+
+- **You can change it per battle later.** Open the battle's page on
+  GamingDiver and pick a different visibility; making one private takes it
+  out of the community list straight away.
+- **Training rooms are separate** and upload as **Private** by default
+  (*Training-room battles*, just below). See [Training rooms](#training-rooms).
+- **Both sides of a battle can be merged.** When a teammate or an opponent
+  uploads the same battle, Debrief can combine both views into one fuller
+  replay, but never in a way that shows your upload to more people than you
+  chose: a Public upload can be merged into any other; a Fleet upload only
+  into uploads from the same fleet that are Fleet or Private; a Private
+  upload never.
+- Site admins can open any upload, including private ones, but only to fix
+  problems with the site.
+
+### 5. Start it in the background with Windows
 
 So you never have to remember to start it before playing.
 
@@ -129,7 +157,7 @@ move.
 | **Pause / Resume**, **Quit** | |
 
 **Start automatically when I log in** is a checkbox in Settings; see
-[Start it in the background with Windows](#4-start-it-in-the-background-with-windows).
+[Start it in the background with Windows](#5-start-it-in-the-background-with-windows).
 
 **To build a standalone `.exe`** that needs no Python at all — run this *on the
 Windows PC*, since PyInstaller bundles the interpreter of the machine it runs
