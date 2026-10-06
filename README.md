@@ -124,10 +124,10 @@ automatically when I log in**. It takes effect the moment you tick it (the
 line underneath confirms "will start when you log in").
 
 That's it. From then on it starts silently when you log in to Windows: no
-window, not even a flash, just the diver icon in the tray. It registers a
-per-user scheduled task named *GamingDiver Debrief Uploader* (no admin rights
-needed), and the checkbox always shows whether that task really exists. Untick
-it to stop. (`Install-Uploader.ps1` does the same from PowerShell.)
+window, not even a flash, just the diver icon in the tray. It adds itself to
+your own startup list (the same place Discord and Steam use), so it needs no
+administrator rights and shows up under **Task Manager -> Startup apps**,
+where you can also switch it off. Untick the box to remove it.
 
 **Alternative: the Startup folder**
 

@@ -110,40 +110,89 @@ class TestSingleInstance(unittest.TestCase):
 
 
 class TestAutostart(unittest.TestCase):
-    """schtasks is driven through an injectable runner so this can be tested
-    on any machine without touching the real task scheduler."""
+    """Start-at-login is a per-user Run registry entry (no admin rights).
+    Registry and schtasks are injected, so this runs on any machine."""
 
-    class Fake:
-        def __init__(self, rc=0):
-            self.rc, self.calls = rc, []
+    class Reg:
+        def __init__(self, fail=False):
+            self.v, self.fail = {}, fail
+
+        def get(self, n):
+            return self.v.get(n)
+
+        def set(self, n, val):
+            if self.fail:
+                raise PermissionError("Access is denied")
+            self.v[n] = val
+
+        def delete(self, n):
+            self.v.pop(n, None)
+
+    class Tasks:
+        """schtasks: rc for /Query (legacy task present?) and /Delete."""
+        def __init__(self, exists=False, delete_rc=0):
+            self.exists, self.delete_rc, self.calls = exists, delete_rc, []
 
         def __call__(self, args):
             self.calls.append(args)
+            rc = (0 if self.exists else 1) if "/Query" in args else self.delete_rc
+            if "/Delete" in args and rc == 0:
+                self.exists = False
 
             class R:
-                returncode = self.rc
+                returncode = rc
                 stdout = stderr = ""
             return R()
 
-    def test_enable_creates_a_logon_task(self):
-        if not autostart.supported():
-            self.skipTest("Windows only")
-        f = self.Fake()
-        ok, _ = autostart.enable(run=f)
+    def setUp(self):
+        self._sup = autostart.supported
+        autostart.supported = lambda: True
+
+    def tearDown(self):
+        autostart.supported = self._sup
+
+    def test_enable_needs_no_admin_and_writes_the_run_entry(self):
+        reg, tasks = self.Reg(), self.Tasks()
+        ok, why = autostart.enable(reg=reg, run=tasks)
+        self.assertTrue(ok, why)
+        cmd = reg.v[autostart.NAME]
+        self.assertIn("app.py", cmd)
+        self.assertIn("run --tray --quiet", cmd)
+        self.assertFalse(any("/Create" in c for c in tasks.calls))   # no schtasks
+        self.assertTrue(autostart.is_enabled(reg=reg, run=tasks))
+
+    def test_disable_removes_the_entry_and_a_legacy_task(self):
+        reg, tasks = self.Reg(), self.Tasks(exists=True)
+        autostart.enable(reg=reg, run=tasks)
+        ok, _ = autostart.disable(reg=reg, run=tasks)
         self.assertTrue(ok)
-        self.assertIn("/SC", f.calls[0])
-        self.assertIn("ONLOGON", f.calls[0])
+        self.assertNotIn(autostart.NAME, reg.v)
+        self.assertTrue(any("/Delete" in c for c in tasks.calls))
+        self.assertFalse(autostart.is_enabled(reg=reg, run=tasks))
+
+    def test_a_legacy_scheduled_task_still_counts_as_enabled(self):
+        self.assertTrue(autostart.is_enabled(reg=self.Reg(), run=self.Tasks(exists=True)))
 
     def test_failure_is_reported_not_swallowed(self):
-        if not autostart.supported():
-            self.skipTest("Windows only")
-        ok, why = autostart.enable(run=self.Fake(rc=1))
+        ok, why = autostart.enable(reg=self.Reg(fail=True), run=self.Tasks())
         self.assertFalse(ok)
-        self.assertTrue(why)
+        self.assertIn("Access is denied", why)
+
+    def test_real_registry_round_trip_on_windows(self):
+        """The winreg calls themselves, under a throwaway value name."""
+        if os.name != "nt":
+            self.skipTest("Windows only")
+        reg, name = autostart._Registry(), "GamingDiver Debrief Uploader (test)"
+        try:
+            reg.set(name, "x")
+            self.assertEqual(reg.get(name), "x")
+        finally:
+            reg.delete(name)
+        self.assertIsNone(reg.get(name))
+        reg.delete(name)                       # deleting twice is harmless
 
     def test_unsupported_platform_is_honest(self):
-        if autostart.supported():
-            self.skipTest("not Windows")
+        autostart.supported = lambda: False
         ok, why = autostart.enable()
         self.assertFalse(ok)
         self.assertIn("Windows", why)

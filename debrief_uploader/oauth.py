@@ -32,8 +32,10 @@ class _Server(http.server.HTTPServer):
     # HTTPServer turns SO_REUSEADDR on, and on Windows that lets a second
     # socket bind a port someone else already holds -- the sign-in reply
     # could then reach the other listener. Exclusive use, so a taken port
-    # fails and _listen moves on to the next one.
-    allow_reuse_address = False
+    # fails and _listen moves on to the next one. Elsewhere SO_REUSEADDR
+    # never shares a listening port; it only lets a port sitting in TIME_WAIT
+    # (a sign-in a minute ago) be reused, so keep it there.
+    allow_reuse_address = os.name != "nt"
 
     def server_bind(self):
         import socket
