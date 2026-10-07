@@ -11,6 +11,10 @@ jobs:
       matrix:
         os: [windows-latest, ubuntu-latest]
     runs-on: ${{ matrix.os }}
+    # The suite takes about a minute. Without a limit a hung apt mirror or
+    # Xvfb start sits silently for GitHub's 6-hour default (2026-10-07: 33
+    # minutes with no output before it was cancelled).
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
