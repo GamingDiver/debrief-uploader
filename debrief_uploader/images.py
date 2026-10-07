@@ -61,8 +61,9 @@ def pillarbox_bounds(im):
     rgb = im.convert("RGB")
     first, last = w, -1
     for y in range(0, h, BAR_ROW_STRIDE):
-        row = rgb.crop((0, y, w, y + 1)).getdata()
-        for x, (r, g, b) in enumerate(row):
+        row = rgb.crop((0, y, w, y + 1)).tobytes()
+        for x in range(w):
+            r, g, b = row[x * 3], row[x * 3 + 1], row[x * 3 + 2]
             if 0.299 * r + 0.587 * g + 0.114 * b > BAR_LUMA:
                 if x < first:
                     first = x

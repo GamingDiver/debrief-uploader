@@ -16,20 +16,43 @@ import webbrowser
 from . import config, matcher, ui
 from .api import ApiError
 from .engine import Engine
+from .ui import _res
 
 IDLE = (0x64, 0x7d, 0x8e)
 WATCH = (0x0f, 0x6b, 0x70)
 BUSY = (0xff, 0xd1, 0x66)
 ATTN = (0xa8, 0x41, 0x0e)
 
+_BASE = None
+
+def _base_logo(size):
+    global _BASE
+    from PIL import Image
+    if _BASE is None:
+        try:
+            with Image.open(_res("app.ico")) as src:
+                _BASE = src.convert("RGBA")
+        except Exception:
+            _BASE = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    return _BASE.resize((size, size), Image.LANCZOS)
 
 def _icon_image(colour):
-    """A small mark drawn at runtime -- no asset file to ship or lose."""
+    """App logo fills the canvas, status dot in the top right corner."""
     from PIL import Image, ImageDraw
-    im = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
-    d = ImageDraw.Draw(im)
-    d.ellipse([4, 4, 60, 60], fill=(11, 22, 32, 255), outline=colour + (255,), width=5)
-    d.polygon([(32, 18), (44, 44), (32, 37), (20, 44)], fill=colour + (255,))
+    size = 64
+    scale = 4
+    im = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+
+    # 1. Logo first, 64 px, at x=0, y=0
+    im.alpha_composite(_base_logo(64), (0, 0))
+
+    # 2. Dot second, on top of the logo. Radius 15 px, center at x=48, y=16
+    dot = Image.new("RGBA", (size * scale, size * scale), (0, 0, 0, 0))
+    cx, cy, r = 48 * scale, 16 * scale, 15 * scale
+    ImageDraw.Draw(dot).ellipse((cx - r, cy - r, cx + r, cy + r),
+                                fill=colour + (255,))
+    im.alpha_composite(dot.resize((size, size), Image.LANCZOS))
+
     return im
 
 
