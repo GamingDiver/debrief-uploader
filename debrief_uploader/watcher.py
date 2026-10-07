@@ -11,6 +11,8 @@ import os
 import shutil
 import time
 
+from .config import is_excluded
+
 MAGIC = b"\x57\x47\xff\x52"      # "WG\xffR"
 REPLAY_EXT = ".wowsreplay"
 TEMP_NAME = "temp.wowsreplay"    # written during the battle; never a candidate
@@ -91,14 +93,19 @@ def _openable(path):
         return False
 
 
-def scan_replays(dirs):
+def scan_replays(dirs, exclude=None, since=None):
     """Every candidate replay path, newest first.
 
     Newest first matters: the game keeps only ~10, but if a scan is ever cut
     short the battle that just finished is the one that must not be missed.
+
+    `exclude`: folders never read. `since`: files older than this epoch are
+    skipped -- both before the file is opened, hashed or copied.
     """
     out = []
     for d in dirs:
+        if is_excluded(d, exclude):
+            continue
         try:
             entries = list(os.scandir(d))
         except OSError:
@@ -109,14 +116,20 @@ def scan_replays(dirs):
             try:
                 if not e.is_file():
                     continue
-                out.append((e.path, e.stat().st_mtime))
+                mt = e.stat().st_mtime
             except OSError:
                 continue
+            if since is not None and mt < since:
+                continue
+            if is_excluded(e.path, exclude):
+                continue
+            out.append((e.path, mt))
     out.sort(key=lambda r: r[1], reverse=True)
     return [p for p, _ in out]
 
 
-def scan_shots(dirs, min_bytes=0, max_age=None, now=None):
+def scan_shots(dirs, min_bytes=0, max_age=None, now=None, exclude=None,
+               since=None):
     """Candidate screenshots, newest first, already filtered.
 
     The filtering happens HERE, from the directory entry's own stat data,
@@ -133,6 +146,8 @@ def scan_shots(dirs, min_bytes=0, max_age=None, now=None):
     now = now if now is not None else time.time()
     out = []
     for d in dirs:
+        if is_excluded(d, exclude):
+            continue
         try:
             entries = list(os.scandir(d))
         except OSError:
@@ -149,6 +164,10 @@ def scan_shots(dirs, min_bytes=0, max_age=None, now=None):
             if max_age is not None and now - st.st_mtime > max_age:
                 continue
             if st.st_size < min_bytes:
+                continue
+            if since is not None and st.st_mtime < since:
+                continue
+            if is_excluded(e.path, exclude):
                 continue
             out.append((e.path, st.st_mtime, st.st_size))
     out.sort(key=lambda r: r[1], reverse=True)

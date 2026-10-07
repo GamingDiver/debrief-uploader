@@ -466,6 +466,43 @@ def open_settings(app):
 
         status = _label(foot, "Changes save as you make them.", size=9, fg=MUTED)
 
+        # ---- first run: nothing is read until this is pressed ----
+        if not s.get("watching_confirmed"):
+            gate = tk.Frame(outer, bg=PANEL, highlightbackground=AMBER,
+                            highlightthickness=1)
+            gate.pack(fill="x", pady=(0, 10))
+            _label(gate, "CHECK THESE FOLDERS FIRST", size=8, fg=AMBER,
+                   bold=True, bg=PANEL).pack(anchor="w", padx=12, pady=(9, 4))
+            _label(gate, "Nothing has been read yet. Look over the folders "
+                         "below and add anything that must never be "
+                         "uploaded (sensitive folders) to "
+                         "Excluded folders. Then press Start watching.\n\n"
+                         "Only battles and screenshots from after that "
+                         "moment are ever considered - anything already in "
+                         "these folders is left alone.",
+                   size=9, bg=PANEL, wraplength=560).pack(
+                anchor="w", padx=12)
+
+            def start_watching():
+                s.confirm_watching()
+                try:
+                    app.eng.apply_exclusions()
+                except Exception as e:
+                    app.log.error("could not apply exclusions: %s" % e)
+                app.log.info("watching started - only files from now on "
+                             "are considered")
+                gate.destroy()
+                status.configure(text="Watching started.", fg=AMBER)
+                refresh = getattr(app, "_refresh", None)
+                if refresh:
+                    try:
+                        refresh()
+                    except Exception:
+                        pass
+
+            _button(gate, "Start watching", start_watching,
+                    primary=True).pack(anchor="w", padx=12, pady=(8, 11))
+
         # ---- account ----
         acc = _section(outer, "Account")
         who = _label(acc, "", size=10, bg=PANEL)
@@ -492,7 +529,7 @@ def open_settings(app):
         refresh_account()
 
         # ---- folders ----
-        def folder_box(title, key, hint):
+        def folder_box(title, key, hint, on_change=None):
             box = _section(outer, title)
             _label(box, hint, size=8, fg=MUTED, bg=PANEL,
                    wraplength=560).pack(anchor="w", padx=12)
@@ -512,6 +549,8 @@ def open_settings(app):
                         s["_dirs_pinned"] = True
                         lst.insert("end", d)
                         save_now()
+                        if on_change:
+                            on_change()
 
             def remove():
                 for i in reversed(lst.curselection()):
@@ -519,6 +558,8 @@ def open_settings(app):
                     lst.delete(i)
                 s["_dirs_pinned"] = True
                 save_now()
+                if on_change:
+                    on_change()
 
             row = tk.Frame(box, bg=PANEL)
             row.pack(anchor="w", padx=12, pady=(0, 11))
@@ -533,6 +574,24 @@ def open_settings(app):
                    "Where your scorecard captures land. Windows: "
                    "Pictures\\Screenshots. Steam F12: the Steam userdata "
                    "screenshots folder.")
+
+        def exclusions_changed():
+            try:
+                n = app.eng.apply_exclusions()
+            except Exception as e:
+                app.log.error("could not apply exclusions: %s" % e)
+                return
+            if n:
+                status.configure(text="Dropped %d battle(s) from excluded "
+                                      "folders." % n, fg=AMBER)
+
+        folder_box("Excluded folders", "exclude_dirs",
+                   "Never read anything inside these, even when it sits in a "
+                   "folder above. For replays or screenshots you must not "
+                   "share, such as sensitive folders. Anything "
+                   "already waiting from an excluded folder is dropped; "
+                   "battles already uploaded stay on the site until you "
+                   "delete them there.", on_change=exclusions_changed)
 
         # ---- uploads ----
         up = _section(outer, "Uploads")

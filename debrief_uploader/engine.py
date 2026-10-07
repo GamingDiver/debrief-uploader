@@ -31,6 +31,8 @@ class Engine:
         self.blocked = None          # terminal error message; queue is parked
         self.started = time.time()
         self._first_scan = True
+        self._dir_since = {}         # folder -> when this run first scanned it
+        self._pauses = []            # [start, end or None] while paused
         self._warned_skew = False
         self._seen_files = set()
         self._said = {}
@@ -94,11 +96,77 @@ class Engine:
                           "(the files are untouched)"
                           % (dropped, self.s["shot_max_age_hours"]))
 
+    def _watch_start(self, path):
+        """When this run started watching the folder `path` lives in.
+
+        Per folder, not per process: a folder added in Settings mid-session
+        has only been watched since it was added, so anything older in it is
+        just as much "from before" as a file found at startup.
+        """
+        d = config._norm(os.path.dirname(path))
+        return self._dir_since.setdefault(d, time.time())
+
+    def pause(self, now=None):
+        self._pauses.append([now if now is not None else time.time(), None])
+
+    def resume(self, now=None):
+        if self._pauses and self._pauses[-1][1] is None:
+            self._pauses[-1][1] = now if now is not None else time.time()
+
+    def _during_pause(self, t):
+        """Pause means "don't watch this": a battle that finished, or a
+        screenshot taken, while paused is never sent unasked on resume."""
+        for a, b in self._pauses:
+            if t >= a and (b is None or t <= b):
+                return True
+        return False
+
+    def apply_exclusions(self):
+        """Settle anything already tracked that is now inside an excluded
+        folder: never upload it, and delete our staged copy of it. Returns
+        how many replays were dropped. Uploaded rows are left alone -- those
+        are on the site, and only the site can remove them."""
+        ex = self.s.get("exclude_dirs")
+        if not ex:
+            return 0
+        n = 0
+        for row in self.store.replays():
+            if row["state"] in (UPLOADED,) or row["remote_id"]:
+                continue
+            if not config.is_excluded(row["source_path"] or "", ex):
+                continue
+            if row["state"] == SKIPPED and not row["staged_path"]:
+                continue
+            self.store.detach_shots(row["md5"])
+            self._drop_staged(row)
+            self.store.update_replay(row["md5"], state=SKIPPED,
+                                     note="in an excluded folder")
+            n += 1
+        paths = [sh["path"] for sh in self.store.all_shots(uploaded=False)
+                 if config.is_excluded(sh["path"], ex)]
+        if paths:
+            self.store.forget_shots(paths)
+        if n or paths:
+            self.log.info("excluded folders: dropped %d replay(s) and %d "
+                          "screenshot(s) that had not been uploaded"
+                          % (n, len(paths)))
+        return n
+
+    def _drop_staged(self, row):
+        try:
+            if row["staged_path"] and os.path.exists(row["staged_path"]):
+                os.remove(row["staged_path"])
+            self.store.update_replay(row["md5"], staged_path=None)
+        except OSError:
+            pass
+
     # ---- intake -----------------------------------------------------------
     def intake_replays(self, now=None):
         now = now if now is not None else time.time()
         found = 0
-        for p in watcher.scan_replays(self.s["replay_dirs"]):
+        for p in watcher.scan_replays(self.s["replay_dirs"],
+                                      self.s.get("exclude_dirs"),
+                                      self.s.get("watching_since")):
             # Cheap first: settling sleeps, and hashing reads megabytes. Neither
             # should happen again for a file we already know about.
             try:
@@ -128,12 +196,19 @@ class Engine:
                 self.log.error("could not stage %s: %s" % (os.path.basename(p), e))
                 continue
             t_close = watcher.close_time(p)
-            backfill = self._first_scan and (now - t_close) > self.s["max_lag"]
+            # Closed while the app was not running (and too long ago to be
+            # the battle the user just launched it for). It is kept safe,
+            # but nothing about it leaves the PC -- not even the
+            # identification request -- until the user says upload.
+            backfill = (t_close < self._watch_start(p) - self.s["max_lag"]
+                        or self._during_pause(t_close))
             self.store.add_replay(
                 md5=md5, source_path=p, staged_path=staged,
                 filename=os.path.basename(p), size=os.path.getsize(p),
-                t_close=t_close, state=NEW, backfill=1 if backfill else 0,
-                note="found before the app was running" if backfill else None)
+                t_close=t_close, state=HELD if backfill else NEW,
+                backfill=1 if backfill else 0,
+                note="found before the app was running - upload it?"
+                     if backfill else None)
             self._seen_files.add(fp)
             self.log.info("new replay: %s%s" % (os.path.basename(p),
                                                 " (backfill)" if backfill else ""))
@@ -152,11 +227,12 @@ class Engine:
         max_age = self.s["shot_max_age_hours"] * 3600
         min_bytes = self.s["shot_min_kb"] * 1024
         found = 0
-        for p, mtime, size in watcher.scan_shots(self.s["shot_dirs"], min_bytes,
-                                                 max_age, now):
+        for p, mtime, size in watcher.scan_shots(
+                self.s["shot_dirs"], min_bytes, max_age, now,
+                self.s.get("exclude_dirs"), self.s.get("watching_since")):
             if found >= self.s["shot_scan_limit"]:
                 break                      # the rest keep until the next pass
-            if self.store.have_shot(p):
+            if self.store.have_shot(p) or self._during_pause(mtime):
                 continue
             if watcher.recently_written(p, mtime) and not watcher.settled(
                     p, self.s["settle_quiet"], 20, self.s["settle_sleep"]):
@@ -338,6 +414,18 @@ class Engine:
         n = 0
         for r in recs:
             if matcher.is_orphan(r, recs, now, self.s):
+                row = self.store.replay(r.key)
+                # "Ask me before every upload" means every upload, including
+                # the ones that never got scorecards, and a battle from
+                # before the app was running is never sent unasked.
+                if row["backfill"] or self.s.get("review_mode"):
+                    self.store.update_replay(
+                        r.key, state=HELD,
+                        note="no scorecards were taken - upload it anyway?")
+                    self.log.info("no scorecards for %s - waiting for you"
+                                  % self._label(row))
+                    n += 1
+                    continue
                 self.store.update_replay(r.key, state=ORPHAN,
                                          note="no scorecards were taken")
                 row = self.store.replay(r.key)
@@ -415,6 +503,8 @@ class Engine:
             for r in self.store.replays([ORPHAN]):
                 if (r["next_try"] or 0) > now:
                     continue
+                if r["backfill"] or self.s.get("review_mode"):
+                    continue      # held rows only go through confirm()
                 if now - (r["t_close"] or now) < self.s["no_scorecard_min_age"]:
                     continue
                 return r
@@ -452,6 +542,13 @@ class Engine:
     # ---- one pass ---------------------------------------------------------
     def tick(self, now=None):
         now = now if now is not None else time.time()
+        if not self.s.get("watching_confirmed"):
+            # First run: nothing is read, hashed, copied or sent until the
+            # user has seen the folder lists (and excluded what they need to).
+            self._say_once("unconfirmed", "not watching yet - check the "
+                           "folders in Settings and press 'Start watching'",
+                           error=True)
+            return 0
         self.intake_replays(now)
         self.intake_shots(now)
         if self.client.session.signed_in:
@@ -536,6 +633,16 @@ class Engine:
 
         add("")
         add("FOLDERS")
+        if not self.s.get("watching_confirmed"):
+            add("  NOT WATCHING YET - nothing is read until you check the "
+                "folders (Settings -> Start watching, or "
+                "'Debrief.cmd setup --start')")
+        elif self.s.get("watching_since"):
+            add("  considering files from %s on"
+                % time.strftime("%Y-%m-%d %H:%M",
+                                time.localtime(self.s["watching_since"])))
+        for d in self.s.get("exclude_dirs") or []:
+            add("  excluded:  %s" % d)
         for kind, dirs, exts in (("replays", self.s["replay_dirs"], (".wowsreplay",)),
                                  ("screenshots", self.s["shot_dirs"],
                                   (".png", ".jpg", ".jpeg"))):
@@ -543,6 +650,9 @@ class Engine:
                 add("  %s: NONE CONFIGURED  ->  run: Debrief.cmd setup" % kind)
                 continue
             for d in dirs:
+                if config.is_excluded(d, self.s.get("exclude_dirs")):
+                    add("  %s: EXCLUDED, never read  %s" % (kind, d))
+                    continue
                 if not os.path.isdir(d):
                     add("  %s: MISSING  %s" % (kind, d))
                     continue

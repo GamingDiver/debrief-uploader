@@ -57,6 +57,9 @@ def cmd_setup(args):
     if args.shot_dir:
         s["shot_dirs"] = args.shot_dir
         s["_dirs_pinned"] = True
+    if args.exclude_dir:
+        s["exclude_dirs"] = config.dedupe_dirs(
+            s["exclude_dirs"] + [os.path.normpath(d) for d in args.exclude_dir])
     s.save()
     print("Replay folders:")
     for d in s["replay_dirs"] or ["  (none found -- pass --replay-dir)"]:
@@ -64,9 +67,21 @@ def cmd_setup(args):
     print("Screenshot folders:")
     for d in s["shot_dirs"] or ["  (none found -- pass --shot-dir)"]:
         print("  %s" % d)
+    print("Excluded (never read):")
+    for d in s["exclude_dirs"] or ["(none)"]:
+        print("  %s" % d)
     print("\nState and staged replays: %s" % config.app_dir())
     if not s["replay_dirs"] or not s["shot_dirs"]:
         return 1
+    if args.start:
+        first = not s.get("watching_since")
+        s.confirm_watching()
+        print("\nWatching %s. Only battles and screenshots from now on are "
+              "considered." % ("starts now" if first else "was already on"))
+    elif not s.get("watching_confirmed"):
+        print("\nNot watching yet. If these folders are right (exclude "
+              "anything you must not upload with --exclude-dir), run:\n"
+              "  Debrief.cmd setup --start")
     return 0
 
 
@@ -204,8 +219,16 @@ def _preflight(s, client, log, fatal=True):
                   " - open Settings from the tray icon to choose one"))
         if fatal:
             return False
-    log.info("watching %d replay folder(s) and %d screenshot folder(s)"
-             % (len(s["replay_dirs"]), len(s["shot_dirs"])))
+    if not s.get("watching_confirmed"):
+        log.error("not watching yet: nothing is read until you check the "
+                  "folders - " + ("open Settings from the tray icon and press "
+                                  "Start watching" if not fatal else
+                                  "run 'Debrief.cmd setup', then "
+                                  "'Debrief.cmd setup --start'"))
+    log.info("watching %d replay folder(s) and %d screenshot folder(s)%s"
+             % (len(s["replay_dirs"]), len(s["shot_dirs"]),
+                ", excluding %d" % len(s["exclude_dirs"])
+                if s["exclude_dirs"] else ""))
     for d in s["replay_dirs"] + s["shot_dirs"]:
         if not os.path.isdir(d):
             log.warn("folder is missing: %s" % d)
@@ -276,6 +299,10 @@ def main(argv=None):
     q = sub.add_parser("setup", help="find (or set) the folders to watch")
     q.add_argument("--replay-dir", action="append")
     q.add_argument("--shot-dir", action="append")
+    q.add_argument("--exclude-dir", action="append",
+                   help="never read anything inside this folder")
+    q.add_argument("--start", action="store_true",
+                   help="the folders are right: start watching from now")
     q.set_defaults(fn=cmd_setup)
 
     q = sub.add_parser("login", help="sign in")

@@ -28,6 +28,9 @@ except Exception:
 class FakeEngine:
     blocked = None
 
+    def apply_exclusions(self):
+        return 0
+
     def counts(self):
         return {"new": 0, "awaiting_shots": 1, "held": 2, "ready": 0,
                 "uploading": 0, "uploaded": 3, "orphan": 0, "skipped": 0}
@@ -335,6 +338,11 @@ class TestWindowsBuild(unittest.TestCase):
         self.ui.open_review(self.app)
         self.assertEqual(self.errors, [])
         self.assertIn("1 to review", titles[-1])
+
+    def test_settings_window_builds_before_first_confirm(self):
+        self.app.s["watching_confirmed"] = False
+        self.ui.open_settings(self.app)
+        self.assertEqual(self.errors, [])
 
     def test_settings_window_builds_with_nothing_configured(self):
         self.app.s["replay_dirs"] = []

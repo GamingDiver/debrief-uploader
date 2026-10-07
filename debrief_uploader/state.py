@@ -167,6 +167,17 @@ class Store:
     def mark_shots_uploaded(self, md5):
         self._write("UPDATE shots SET uploaded=1 WHERE replay_md5=?", (md5,))
 
+    def all_shots(self, uploaded=None):
+        if uploaded is None:
+            return self._all("SELECT * FROM shots")
+        return self._all("SELECT * FROM shots WHERE uploaded=?",
+                         (1 if uploaded else 0,))
+
+    def forget_shots(self, paths):
+        """Detach and ignore: these are never matched or uploaded."""
+        self._writemany("UPDATE shots SET replay_md5=NULL, ignored=1 WHERE path=?",
+                        [(p,) for p in paths])
+
     def prune_shots(self, older_than):
         """Forget screenshots that never found a battle. The files are never
         touched -- only our note that we looked at them."""

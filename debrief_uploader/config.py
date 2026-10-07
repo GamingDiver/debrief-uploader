@@ -76,6 +76,17 @@ DEFAULTS = {
     "training_visibility": "private",
     "delete_staged_after_upload": False,
     "delete_staged_after_days": 0,   # 0 = keep forever
+    # Nothing is read until the user has looked at the folder lists and said
+    # go. Some players keep sensitive replays they must not share on the
+    # same PC, and auto-detect plus an immediate first scan could send one
+    # before they had a chance to exclude it. Settings.load() sets this True
+    # for installs that were already running before it existed.
+    "watching_confirmed": False,
+    # Epoch seconds of the first time watching started. Any replay or
+    # screenshot older than this is never read at all -- it predates the
+    # user's decision to use the app, so it was never theirs to upload by
+    # accident (Greg 2026-10-07).
+    "watching_since": None,
 }
 
 # ---- where things live -----------------------------------------------------
@@ -129,6 +140,39 @@ def _steam_root():
         return p if os.path.isdir(p) else None
 
 
+def _norm(p):
+    """Comparison key for a folder: Windows paths are case-insensitive, and
+    the Steam registry path is lowercase while the fallback list is not, so
+    the same folder used to be listed (and scanned) twice."""
+    return os.path.normcase(os.path.normpath(os.path.abspath(p)))
+
+
+def dedupe_dirs(dirs):
+    out, seen = [], set()
+    for d in dirs or []:
+        k = _norm(d)
+        if k not in seen:
+            seen.add(k)
+            out.append(d)
+    return out
+
+
+def is_excluded(path, exclude_dirs):
+    """True when `path` is inside (or is) any excluded folder.
+
+    Checked on every candidate file, not just on the watched folder list, so
+    an excluded folder nested inside a watched one is still never read.
+    """
+    if not exclude_dirs:
+        return False
+    p = _norm(path)
+    for d in exclude_dirs:
+        k = _norm(d)
+        if p == k or p.startswith(k.rstrip(os.sep) + os.sep):
+            return True
+    return False
+
+
 def _steam_libraries(root):
     """Every steamapps library, from libraryfolders.vdf. Best-effort text parse:
     the vdf is tiny and we only need the "path" values."""
@@ -162,17 +206,53 @@ def detect_replay_dirs():
         if os.path.isdir(p):
             found.append(p)
     for p in REPLAY_DIR_CANDIDATES:
-        if os.path.isdir(p) and p not in found:
+        if os.path.isdir(p):
             found.append(p)
-    return found
+    return dedupe_dirs(found)
+
+
+# Steam's app id for World of Warships: Legends. Read from the installed
+# appmanifest when possible; this is the fallback.
+WOWSL_STEAM_APPID = "2964090"
+WOWSL_INSTALLDIR = "World of Warships Legends"
+
+
+def _wowsl_appids(root):
+    """App ids whose appmanifest installs World of Warships Legends.
+
+    Only the release game's own folder name counts, so any separately
+    installed client is never picked up by detection.
+    """
+    ids = set()
+    for lib in _steam_libraries(root):
+        try:
+            names = os.listdir(lib)
+        except OSError:
+            continue
+        for n in names:
+            if not (n.startswith("appmanifest_") and n.endswith(".acf")):
+                continue
+            try:
+                with open(os.path.join(lib, n), "r", encoding="utf-8",
+                          errors="replace") as f:
+                    txt = f.read()
+            except OSError:
+                continue
+            for line in txt.splitlines():
+                parts = line.strip().split('"')
+                if len(parts) >= 4 and parts[1].lower() == "installdir":
+                    if parts[3].lower() == WOWSL_INSTALLDIR.lower():
+                        ids.add(n[len("appmanifest_"):-len(".acf")])
+                    break
+    return ids or {WOWSL_STEAM_APPID}
 
 
 def detect_shot_dirs():
-    """Pictures\\Screenshots plus every Steam userdata screenshots folder.
+    """Pictures\\Screenshots plus the Steam F12 folder for Legends only.
 
-    The WoWSL appid is NOT hardcoded -- we glob every game's screenshot folder
-    under 760/remote. Extra folders are harmless: a screenshot that matches no
-    battle is simply never uploaded.
+    This used to take every game's Steam screenshot folder. A stray folder
+    rarely mattered for matching, but it meant reading screenshots from games
+    (and other clients) that have nothing to do with this app.
     """
     found = []
     if os.name == "nt":
@@ -182,18 +262,19 @@ def detect_shot_dirs():
     root = _steam_root()
     if root:
         userdata = os.path.join(root, "userdata")
+        appids = _wowsl_appids(root)
         try:
             for uid in os.listdir(userdata):
                 remote = os.path.join(userdata, uid, "760", "remote")
                 if not os.path.isdir(remote):
                     continue
-                for app in os.listdir(remote):
+                for app in sorted(appids):
                     p = os.path.join(remote, app, "screenshots")
                     if os.path.isdir(p):
                         found.append(p)
         except OSError:
             pass
-    return found
+    return dedupe_dirs(found)
 
 
 # ---- settings --------------------------------------------------------------
@@ -206,16 +287,42 @@ class Settings(dict):
         super().__init__(DEFAULTS)
         self["replay_dirs"] = []
         self["shot_dirs"] = []
+        self["exclude_dirs"] = []
         if data:
             self.update({k: v for k, v in data.items() if v is not None or k == "visibility"})
+        for k in ("replay_dirs", "shot_dirs", "exclude_dirs"):
+            self[k] = dedupe_dirs(self[k])
 
     @classmethod
     def load(cls):
         try:
             with open(settings_path(), "r", encoding="utf-8") as f:
-                return cls(json.load(f))
+                data = json.load(f)
         except (OSError, ValueError):
             return cls()
+        # An install that was already watching before the confirm step
+        # existed has, by running, already accepted its folders.
+        if isinstance(data, dict) and "watching_confirmed" not in data:
+            data["watching_confirmed"] = True
+        s = cls(data)
+        if s.get("watching_confirmed") and not s.get("watching_since"):
+            # Upgrading install: start the cutoff now. What it already
+            # tracked stays tracked; nothing older is newly picked up.
+            import time
+            s["watching_since"] = time.time()
+            try:
+                s.save()
+            except OSError:
+                pass
+        return s
+
+    def confirm_watching(self, now=None):
+        """The user has checked the folders: start watching from now."""
+        import time
+        self["watching_confirmed"] = True
+        if not self.get("watching_since"):
+            self["watching_since"] = now if now is not None else time.time()
+        self.save()
 
     def save(self):
         os.makedirs(app_dir(), exist_ok=True)

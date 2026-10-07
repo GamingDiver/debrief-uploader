@@ -298,7 +298,8 @@ class TestMenuIsNotStale(unittest.TestCase):
         _s.modules["pystray"] = FakePystray()
 
         s = config.Settings()
-        s.update({"replay_dirs": [self.tmp], "shot_dirs": [self.tmp]})
+        s.update({"replay_dirs": [self.tmp], "shot_dirs": [self.tmp],
+                  "watching_confirmed": True})
         self.store = Store(os.path.join(self.tmp, "state.db"))
         self.tray = tray.Tray(s, self.store, FakeClient(), Log(None, echo=False))
         self.tray.icon = FakeIcon()
@@ -315,6 +316,13 @@ class TestMenuIsNotStale(unittest.TestCase):
 
     def _labels(self):
         return self.tray._build_menu().labels()
+
+    def test_first_run_puts_the_folder_check_first(self):
+        self.tray.s["watching_confirmed"] = False
+        self.tray._refresh()
+        labels = [str(getattr(m, "text", m)) for m in self.tray.icon.menu.items]
+        self.assertIn("check your folders", labels[0])
+        self.assertIn("Check folders and start...", labels)
 
     def test_counts_track_the_store(self):
         self.assertIn("Review (0)", self._labels())

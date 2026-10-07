@@ -52,6 +52,8 @@ class Tray:
         return held, queued, waiting
 
     def _title(self):
+        if not self.s.get("watching_confirmed"):
+            return "Debrief Uploader - check your folders in Settings to start"
         if not self.client.session.signed_in:
             return "Debrief Uploader - not signed in"
         if self.eng.blocked:
@@ -70,6 +72,8 @@ class Tray:
 
     def _colour(self):
         held, queued, _ = self._counts()
+        if not self.s.get("watching_confirmed"):
+            return ATTN
         if self.eng.blocked or not self.client.session.signed_in or held:
             return ATTN if held or self.eng.blocked else IDLE
         if queued:
@@ -154,7 +158,10 @@ class Tray:
 
     def on_pause(self, *_):
         self.paused = not self.paused
-        self.log.info("paused" if self.paused else "resumed")
+        (self.eng.pause if self.paused else self.eng.resume)()
+        self.log.info("paused - battles and screenshots from now until you "
+                      "resume are not uploaded unless you approve them"
+                      if self.paused else "resumed")
         self._refresh()
 
     def on_retry(self, *_):
@@ -177,18 +184,22 @@ class Tray:
             pystray.MenuItem(self._title(), None, enabled=False),
             pystray.Menu.SEPARATOR,
         ]
+        confirmed = bool(self.s.get("watching_confirmed"))
+        if not confirmed:
+            items.append(pystray.MenuItem("Check folders and start...",
+                                          self.on_settings, default=True))
         if not signed_in:
             # Nothing else matters until this is done, so it goes first and it
             # is the default action.
             items.append(pystray.MenuItem("Sign in...", self.on_sign_in,
-                                          default=True))
+                                          default=confirmed))
         else:
             items.append(pystray.MenuItem(
                 "Review (%d)" % held, self.on_review,
                 enabled=held > 0, default=held > 0))
         items += [
             pystray.MenuItem("Status...", self.on_status,
-                             default=signed_in and not held),
+                             default=confirmed and signed_in and not held),
             pystray.MenuItem("Settings...", self.on_settings),
             pystray.MenuItem("Why isn't it uploading?", self.on_doctor),
             pystray.Menu.SEPARATOR,
@@ -218,6 +229,10 @@ class Tray:
         self.icon = pystray.Icon("gd-debrief", _icon_image(self._colour()),
                                  self._title(), menu=self._build_menu())
         threading.Thread(target=self._loop, daemon=True).start()
+        if not self.s.get("watching_confirmed"):
+            # First run: put the folder check in front of the user rather
+            # than waiting for them to find it in a tray menu.
+            ui.open_settings(self)
         self.icon.run()
         self._stop.set()
         return 0

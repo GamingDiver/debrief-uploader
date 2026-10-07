@@ -123,12 +123,14 @@ class TestEngineOnWorkerThread(unittest.TestCase):
         config.staging_dir = lambda: os.path.join(tmp, "staging")
         try:
             s = config.Settings()
+            s["watching_confirmed"] = True
             s.update({"replay_dirs": [rdir], "shot_dirs": [],
                       "settle_quiet": 0.01, "settle_sleep": 0.01,
                       "min_upload_gap": 0, "max_uploads_per_hour": 0})
             store = Store(os.path.join(tmp, "state.db"))
             eng = engine.Engine(s, store, FakeClient(), Log(None, echo=False))
             eng._first_scan = False
+            eng._watch_start = lambda path: 0
             err = []
 
             def worker():

@@ -105,12 +105,14 @@ class EngineCase(unittest.TestCase):
                        "pair_settle": 0.05,
                        # these fixtures are flat-colour and tiny; the size and
                        # age filters get their own tests below
-                       "shot_min_kb": 0, "shot_max_age_hours": 24 * 365})
+                       "shot_min_kb": 0, "shot_max_age_hours": 24 * 365,
+                       "watching_confirmed": True})
         self.store = Store(os.path.join(self.tmp, "state.db"))
         self.client = FakeClient()
         self.log = Log(None, echo=False)
         self.eng = engine.Engine(self.s, self.store, self.client, self.log)
         self.eng._first_scan = False        # treat everything as live
+        self.eng._watch_start = lambda path: 0
 
     def tearDown(self):
         config.staging_dir = self._orig_staging
@@ -333,14 +335,112 @@ class TestEngineMatching(EngineCase):
                          "an icon must not be uploaded as a scorecard")
 
     def test_backfill_is_held_not_auto_uploaded(self):
-        self.eng._first_scan = True
+        del self.eng._watch_start          # the real per-folder clock
         self.battle("Z", time.time() - 3600)
-        self.eng.tick()
-        self.eng.tick()
+        for _ in range(6):
+            self.eng.tick()
         row = self.store.replays()[0]
         self.assertEqual(row["backfill"], 1)
-        self.assertIn(row["state"], (matcher.HELD, matcher.AWAITING_SHOTS))
+        self.assertEqual(row["state"], matcher.HELD)
         self.assertEqual(len(self.client.rows), 0)
+        self.assertNotIn("meta", self.client.calls,
+                         "nothing about a backfilled replay leaves the PC "
+                         "until the user confirms it")
+
+    def test_backfill_without_scorecards_is_never_auto_uploaded(self):
+        """The leak found 2026-10-07: replays already in the folder at first
+        launch became 'no scorecards' orphans and uploaded unasked."""
+        del self.eng._watch_start
+        now = time.time()
+        for i in range(5):
+            self.make_replay("old%d.wowsreplay" % i, mtime=now - (2 + i) * 3600)
+        for _ in range(12):
+            self.eng.tick(now + 3 * 3600)
+        self.assertEqual(self.client.calls.count("raw"), 0)
+        self.assertEqual(self.client.calls.count("meta"), 0)
+        self.assertEqual({r["state"] for r in self.store.replays()},
+                         {matcher.HELD})
+
+    def test_confirmed_backfill_uploads(self):
+        del self.eng._watch_start
+        self.make_replay("old.wowsreplay", mtime=time.time() - 3 * 3600)
+        self.eng.tick()
+        row = self.store.replays()[0]
+        self.eng.confirm(row["md5"])
+        for _ in range(3):
+            self.eng.tick()
+        self.assertEqual(self.store.replay(row["md5"])["state"], matcher.UPLOADED)
+
+    def test_review_mode_holds_no_scorecard_uploads_too(self):
+        self.s["review_mode"] = True
+        now = time.time()
+        self.make_replay("r.wowsreplay", mtime=now - 20 * 60)
+        for _ in range(6):
+            self.eng.tick(now)
+        self.assertEqual(self.client.calls.count("raw"), 0)
+        self.assertEqual(self.store.replays()[0]["state"], matcher.HELD)
+
+    def test_nothing_is_read_until_folders_are_confirmed(self):
+        self.s["watching_confirmed"] = False
+        self.battle("U", time.time() - 100)
+        for _ in range(4):
+            self.eng.tick()
+        self.assertEqual(self.store.replays(), [])
+        self.assertEqual(self.client.calls, [])
+        self.assertFalse(os.path.exists(self.staging),
+                         "not even a staged copy before the user says go")
+
+    def test_files_older_than_first_run_are_never_read(self):
+        now = time.time()
+        self.s["watching_since"] = now - 600
+        self.make_replay("before.wowsreplay", mtime=now - 900)
+        self.make_shot("before.png", mtime=now - 890)
+        self.battle("after", now - 100)
+        for _ in range(4):
+            self.eng.tick()
+        names = [r["filename"] for r in self.store.replays()]
+        self.assertEqual(names, ["2026_after.wowsreplay"])
+        self.assertFalse(self.store.have_shot(os.path.join(self.sdir, "before.png")))
+
+    def test_battle_played_while_paused_is_held_on_resume(self):
+        now = time.time()
+        self.eng.pause(now - 600)
+        self.battle("P", now - 300)
+        self.eng.resume(now - 60)
+        for _ in range(6):
+            self.eng.tick(now + 3600)
+        row = self.store.replays()[0]
+        self.assertEqual(row["state"], matcher.HELD)
+        self.assertEqual(self.client.calls.count("raw"), 0)
+        self.assertEqual(self.store.shots_for(row["md5"]), [],
+                         "screenshots taken while paused are not read")
+
+    def test_excluded_folder_is_never_read(self):
+        st = os.path.join(self.rdir, "sensitive")
+        os.makedirs(st)
+        with open(os.path.join(st, "private.wowsreplay"), "wb") as f:
+            f.write(watcher.MAGIC + os.urandom(64))
+        self.s["replay_dirs"].append(st)
+        self.s["exclude_dirs"] = [st.upper() if os.name == "nt" else st]
+        for _ in range(4):
+            self.eng.tick()
+        self.assertEqual(self.store.replays(), [])
+
+    def test_excluding_a_folder_later_drops_what_was_not_uploaded(self):
+        self.s["review_mode"] = True
+        self.battle("X", time.time() - 100)
+        for _ in range(4):
+            self.eng.tick()
+        row = self.store.replays()[0]
+        self.assertEqual(row["state"], matcher.HELD)
+        staged = row["staged_path"]
+        self.s["exclude_dirs"] = [self.rdir, self.sdir]
+        self.assertEqual(self.eng.apply_exclusions(), 1)
+        row = self.store.replay(row["md5"])
+        self.assertEqual(row["state"], matcher.SKIPPED)
+        self.assertFalse(os.path.exists(staged))
+        self.assertEqual(self.store.shots_for(row["md5"]), [])
+        self.assertEqual(self.client.calls.count("raw"), 0)
 
     def test_temp_replay_is_never_picked_up(self):
         with open(os.path.join(self.rdir, watcher.TEMP_NAME), "wb") as f:

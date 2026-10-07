@@ -72,7 +72,14 @@ You need Windows 10 or 11, the game, and a free
    environment and finds your replay and screenshot folders. Then the black
    window closes and a **diver icon appears in the system tray** (bottom
    right; click the `^` arrow if it is hidden).
-4. Click the tray icon and choose **Sign in...**, then sign in the same way
+4. **The Settings window opens with the folders it found. Check them, then
+   press Start watching.** Until you press it, nothing is read, copied or
+   sent. If a folder holds anything you must never upload, add it under
+   **Excluded folders** first (see
+   [Keeping folders private](#keeping-folders-private)). Only battles and
+   screenshots from **after** you press Start watching are ever considered:
+   whatever is already in those folders is left alone.
+5. Click the tray icon and choose **Sign in...**, then sign in the same way
    you do on gamingdiver.com:
    - **Sign in with Google** or **Sign in with Discord** if that is how you
      made your account (most people). Your browser opens; sign in there, and
@@ -201,6 +208,8 @@ python -m debrief_uploader status     what it has seen and uploaded
 python -m debrief_uploader review     resolve anything it wasn't sure about
 python -m debrief_uploader run        watch and upload (add --tray for the tray icon)
 python -m debrief_uploader setup      show or set the folders it watches
+                                      (--exclude-dir to never read a folder,
+                                      --start to begin watching from now)
 python -m debrief_uploader login      sign in in the browser (--provider google|discord, or --email)
 python -m debrief_uploader logout     sign out and forget the tokens
 ```
@@ -217,7 +226,11 @@ old; only the scorecard-checked figures are missing.
 
 1. **Quarantines** every new replay to
    `%LOCALAPPDATA%\GamingDiver\DebriefUploader\staging` — before anything else,
-   so the game's rotation can never destroy one it has seen.
+   so the game's rotation can never destroy one it has seen. Only replays
+   newer than the moment you pressed **Start watching**, and never anything
+   in an excluded folder. A replay that finished while the uploader was not
+   running is kept but **not sent anywhere** until you approve it in
+   **Review**.
 2. Asks the site what the battle was (the replay is encrypted; the app never
    holds the key).
 3. Groups your screenshots into per-battle bursts and matches each burst to the
@@ -247,15 +260,38 @@ tray menu.
 
 - **Nothing is deleted.** Your screenshots are only ever read. Staged replays
   are kept forever by default.
-- **It paces itself:** one upload at a time, 20 per hour by default. A backfill
-  of a few hundred replays will not overwhelm the site.
+- **It paces itself:** one upload at a time, 20 per hour by default.
 - **Tokens** are stored encrypted with Windows DPAPI, scoped to your user
   account. Sign out removes them.
 - **Logs** are in `%LOCALAPPDATA%\GamingDiver\DebriefUploader\logs`, kept 7
   days. File names and battle info only — no tokens, no images.
 - **Settings**: `settings.json` next to the logs. Timings, folders, visibility
-  for new uploads, and `review_mode` (hold everything for confirmation — worth
-  turning on for your first session).
+  for new uploads, and `review_mode` (hold everything for confirmation,
+  including battles with no scorecards — worth turning on for your first
+  session).
+
+### Keeping folders private
+
+If you have sensitive folders, replays or screenshots you are not allowed
+to share, add them under **Settings -> Excluded folders** (or
+`Debrief.cmd setup --exclude-dir "D:\path\to\folder"`). Nothing inside an
+excluded folder is ever opened, copied or sent, even when it sits inside a
+folder that is watched.
+
+Belt and braces:
+
+- **Do it before you press Start watching** on first run. Nothing is read
+  before then.
+- **Excluding a folder later** drops anything from it that is still waiting
+  and deletes the uploader's own copy of it. Anything already uploaded stays
+  on the site until you delete it from the battle's page.
+- **Check the folder lists.** The uploader only looks for the release game's
+  folders: Steam's `World of Warships Legends\replays`, the Xbox app's, and
+  Steam `F12` screenshots for Legends only. A separately installed game
+  client is not picked up on its own, but make sure you have not added its
+  folder by hand.
+- **Pause** in the tray menu stops all reading while you play something you
+  do not want watched.
 
 ### Training rooms
 
