@@ -339,6 +339,23 @@ class TestWindowsBuild(unittest.TestCase):
         self.assertEqual(self.errors, [])
         self.assertIn("1 to review", titles[-1])
 
+    def test_pixel_sizes_follow_dpi(self):
+        """PR #2 made the process DPI-aware, so fonts render at the real DPI.
+        Pixel sizes must grow with them or text crowds out the controls."""
+        real = self.ui._SCALE
+        try:
+            self.ui._SCALE = 1.75
+            self.assertEqual(self.ui._px(640), 1120)
+            import tkinter as tk
+            r = tk.Tk()
+            try:
+                lbl = self.ui._label(r, "x", wraplength=560)
+                self.assertEqual(int(str(lbl.cget("wraplength"))), 980)
+            finally:
+                r.destroy()
+        finally:
+            self.ui._SCALE = real
+
     def test_settings_window_builds_before_first_confirm(self):
         self.app.s["watching_confirmed"] = False
         self.ui.open_settings(self.app)

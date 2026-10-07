@@ -44,18 +44,37 @@ def _thread(fn, log, what):
     threading.Thread(target=go, daemon=True).start()
 
 
+# Pixels per 96-dpi pixel. The tray makes the process DPI-aware on Windows
+# (PR #2), so Windows no longer bitmap-stretches these windows: fonts, given
+# in points, come out at the real DPI, while sizes given in pixels would not.
+# Every pixel size below goes through _px() so the layout grows with the
+# text. One value per process: system-aware DPI does not change while
+# running.
+_SCALE = 1.0
+
+
+def _px(n):
+    return int(round(n * _SCALE))
+
+
 def _root(title, w, h):
     import tkinter as tk
+    global _SCALE
     r = tk.Tk()
     r.title(title)
     r.configure(bg=BG)
-    r.geometry("%dx%d" % (w, h))
-    r.winfo_fpixels("1i") / 96
+    # 96 px per inch is 100% on Windows; never shrink below it (macOS
+    # reports 72).
+    _SCALE = max(1.0, r.winfo_fpixels("1i") / 96.0)
+    r.geometry("%dx%d" % (min(_px(w), r.winfo_screenwidth() - 40),
+                          min(_px(h), r.winfo_screenheight() - 80)))
     return r
 
 
 def _label(parent, text, size=10, fg=INK, bold=False, bg=BG, **kw):
     import tkinter as tk
+    if "wraplength" in kw:
+        kw["wraplength"] = _px(kw["wraplength"])
     return tk.Label(parent, text=text, bg=bg, fg=fg, justify="left",
                     font=("Segoe UI", size, "bold" if bold else "normal"), **kw)
 
@@ -337,7 +356,6 @@ def open_review(app, on_change=None):
     of small dishonesty that makes someone stop trusting the rest of it.
     """
     def build():
-
         import tkinter as tk
         from tkinter import ttk
 
@@ -447,7 +465,9 @@ def open_settings(app):
         # scaling applies (a tester at 150% saw it end at the review checkbox,
         # Save and Startup cut off, so nothing he changed was kept). The body
         # scrolls, the window fits the screen, and every change saves itself.
-        r.geometry("640x%d" % max(480, min(900, r.winfo_screenheight() - 120)))
+        r.geometry("%dx%d" % (min(_px(640), r.winfo_screenwidth() - 40),
+                              max(min(_px(480), r.winfo_screenheight() - 120),
+                                  min(_px(900), r.winfo_screenheight() - 120))))
         foot = tk.Frame(r, bg=BG)
         foot.pack(side="bottom", fill="x", padx=16, pady=(4, 12))
         canvas = tk.Canvas(r, bg=BG, highlightthickness=0)
