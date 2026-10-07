@@ -9,6 +9,7 @@ cannot open must not become a dead end.
 import os
 import threading
 
+from ctypes import windll
 from . import autostart, config, oauth
 from .api import ApiError
 
@@ -94,6 +95,16 @@ def _text_window(title, lines, log, what):
         r.mainloop()
     _thread(build, log, what)
 
+def _enable_dpi_awareness():
+    try:
+        windll.shcore.SetProcessDpiAwareness(2)
+    except Exception:
+        try:
+            windll.user32.SetProcessDPIAware()
+        except Exception:
+            pass
+
+
 
 # ---------------------------------------------------------------- status ----
 
@@ -112,6 +123,7 @@ def open_status(app):
     REFRESH_MS = 2000
 
     def build():
+        _enable_dpi_awareness()
         import tkinter as tk
         import webbrowser
 
@@ -336,6 +348,7 @@ def open_review(app, on_change=None):
     of small dishonesty that makes someone stop trusting the rest of it.
     """
     def build():
+
         import tkinter as tk
         from tkinter import ttk
 

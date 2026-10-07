@@ -219,7 +219,13 @@ class Tray:
 
     # ---- run --------------------------------------------------------------
     def run(self):
+        import ctypes
         try:
+            ctypes.windll.shcore.SetProcessDpiAwareness(2)
+        except Exception:
+            ctypes.windll.user32.SetProcessDPIAware()
+        try:
+
             import pystray
         except ImportError:
             self.log.error("the tray needs pystray (pip install pystray). "
