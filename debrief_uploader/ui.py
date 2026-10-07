@@ -9,7 +9,6 @@ cannot open must not become a dead end.
 import os
 import threading
 
-from ctypes import windll
 from . import autostart, config, oauth
 from .api import ApiError
 
@@ -51,6 +50,7 @@ def _root(title, w, h):
     r.title(title)
     r.configure(bg=BG)
     r.geometry("%dx%d" % (w, h))
+    r.winfo_fpixels("1i") / 96
     return r
 
 
@@ -95,16 +95,6 @@ def _text_window(title, lines, log, what):
         r.mainloop()
     _thread(build, log, what)
 
-def _enable_dpi_awareness():
-    try:
-        windll.shcore.SetProcessDpiAwareness(2)
-    except Exception:
-        try:
-            windll.user32.SetProcessDPIAware()
-        except Exception:
-            pass
-
-
 
 # ---------------------------------------------------------------- status ----
 
@@ -123,7 +113,6 @@ def open_status(app):
     REFRESH_MS = 2000
 
     def build():
-        _enable_dpi_awareness()
         import tkinter as tk
         import webbrowser
 

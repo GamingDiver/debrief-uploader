@@ -219,13 +219,16 @@ class Tray:
 
     # ---- run --------------------------------------------------------------
     def run(self):
-        import ctypes
+        if os.name == "nt":
+            import ctypes
+            try:
+                ctypes.windll.shcore.SetProcessDpiAwareness(1)  # system-aware DPI scaling
+            except Exception:
+                try:
+                    ctypes.windll.user32.SetProcessDPIAware()  # pre-8.1 fallback
+                except Exception:
+                    pass
         try:
-            ctypes.windll.shcore.SetProcessDpiAwareness(2)
-        except Exception:
-            ctypes.windll.user32.SetProcessDPIAware()
-        try:
-
             import pystray
         except ImportError:
             self.log.error("the tray needs pystray (pip install pystray). "
