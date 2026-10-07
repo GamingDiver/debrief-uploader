@@ -50,6 +50,7 @@ def _root(title, w, h):
     r.title(title)
     r.configure(bg=BG)
     r.geometry("%dx%d" % (w, h))
+    r.winfo_fpixels("1i") / 96
     return r
 
 
@@ -336,6 +337,7 @@ def open_review(app, on_change=None):
     of small dishonesty that makes someone stop trusting the rest of it.
     """
     def build():
+
         import tkinter as tk
         from tkinter import ttk
 

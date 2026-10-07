@@ -219,6 +219,15 @@ class Tray:
 
     # ---- run --------------------------------------------------------------
     def run(self):
+        if os.name == "nt":
+            import ctypes
+            try:
+                ctypes.windll.shcore.SetProcessDpiAwareness(1)  # system-aware DPI scaling
+            except Exception:
+                try:
+                    ctypes.windll.user32.SetProcessDPIAware()  # pre-8.1 fallback
+                except Exception:
+                    pass
         try:
             import pystray
         except ImportError:
