@@ -325,6 +325,19 @@ class TestEngineMatching(EngineCase):
             self.eng.tick()
         self.assertEqual(len(self.client.rows), 0)
 
+    def test_jpeg_scorecard_under_1mb_is_picked_up(self):
+        """1080p JPEG scorecards at 500-700 KB used to fall under the old
+        1000 KB floor and were never seen."""
+        from PIL import Image
+        self.s["shot_min_kb"] = config.DEFAULTS["shot_min_kb"]
+        p = os.path.join(self.sdir, "card.jpg")
+        Image.frombytes("RGB", (1920, 1080), os.urandom(1920 * 1080 * 3)).save(
+            p, quality=40)
+        kb = os.path.getsize(p) / 1024
+        self.assertLess(kb, 1000)
+        self.eng.intake_shots()
+        self.assertTrue(self.store.have_shot(p))
+
     def test_non_screenshot_images_are_ignored(self):  # noqa: D401
         self.battle("A", time.time() - 100)
         Image.new("RGB", (64, 64), (0, 0, 0)).save(os.path.join(self.sdir, "icon.png"))

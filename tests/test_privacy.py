@@ -106,6 +106,17 @@ class TestFirstRunFlag(unittest.TestCase):
         self.assertTrue(s["watching_confirmed"])
         self.assertIsNotNone(s["watching_since"])
 
+    def test_old_1000kb_floor_is_migrated(self):
+        """A tester's 500-700 KB JPEG scorecards were all skipped (2026-10-07)."""
+        with open(config.settings_path(), "w") as f:
+            json.dump({"shot_min_kb": 1000}, f)
+        self.assertEqual(config.Settings.load()["shot_min_kb"], 100)
+
+    def test_a_chosen_floor_is_kept(self):
+        with open(config.settings_path(), "w") as f:
+            json.dump({"shot_min_kb": 200}, f)
+        self.assertEqual(config.Settings.load()["shot_min_kb"], 200)
+
     def test_confirm_sets_cutoff_once(self):
         s = config.Settings.load()
         s.confirm_watching(now=1000.0)

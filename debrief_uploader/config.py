@@ -55,9 +55,11 @@ DEFAULTS = {
     "shot_max_age_hours": 4,
     # Size floor, checked with a stat() before the image is ever opened.
     # A full-screen scorecard is megabytes; UI grabs and thumbnails are not.
-    # NOTE: Steam's F12 writes JPEG, which can land under 1 MB at 1080p --
-    # lower this to ~200 if you capture with Steam rather than Windows.
-    "shot_min_kb": 1000,
+    # Only a pre-filter: the real gate is the image's dimensions, and the age
+    # window and scan limit already bound the work. It was 1000 until a
+    # tester's 1080p JPEG scorecards (500-700 KB) were all skipped
+    # (2026-10-07); a 1080p capture in any format clears 100 KB.
+    "shot_min_kb": 100,
     # Most new screenshots to take in one pass, so a big folder can never
     # stall a tick.
     "shot_scan_limit": 25,
@@ -88,6 +90,8 @@ DEFAULTS = {
     # accident (Greg 2026-10-07).
     "watching_since": None,
 }
+
+OLD_SHOT_MIN_KB = 1000
 
 # ---- where things live -----------------------------------------------------
 
@@ -304,6 +308,11 @@ class Settings(dict):
         # existed has, by running, already accepted its folders.
         if isinstance(data, dict) and "watching_confirmed" not in data:
             data["watching_confirmed"] = True
+        # Settings.save() writes every key, so installs carry the old 1000 KB
+        # default on disk. That floor skipped ordinary JPEG scorecards; move
+        # anyone still on it to the new default.
+        if isinstance(data, dict) and data.get("shot_min_kb") == OLD_SHOT_MIN_KB:
+            data["shot_min_kb"] = DEFAULTS["shot_min_kb"]
         s = cls(data)
         if s.get("watching_confirmed") and not s.get("watching_since"):
             # Upgrading install: start the cutoff now. What it already

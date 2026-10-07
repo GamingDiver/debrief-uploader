@@ -314,15 +314,16 @@ cheap and current:
 | Setting | Default | What it does |
 |---|---|---|
 | `shot_max_age_hours` | `4` | Ignore screenshots older than this entirely |
-| `shot_min_kb` | `1000` | Skip anything smaller, without opening it |
+| `shot_min_kb` | `100` | Skip anything smaller, without opening it |
 | `shot_scan_limit` | `25` | Most new screenshots taken in one pass |
 
 Files are examined **newest first**, so the battle that just finished is never
 queued behind an archive.
 
-> **If you capture with Steam's `F12`**, it writes JPEG, which can land under
-> 1 MB at 1080p — lower `shot_min_kb` to about `200`. Windows captures
-> (`Win`+`PrtScn`, Snipping Tool) are PNG and comfortably over it.
+> **PNG and JPEG both work.** A full-screen capture at 1080p is well over
+> 100 KB either way (JPEG scorecards typically land around 500-700 KB). Only
+> raise `shot_min_kb` if small non-scorecard images in the folder are being
+> picked up.
 
 ### How quickly it decides
 

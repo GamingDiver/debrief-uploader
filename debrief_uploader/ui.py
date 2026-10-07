@@ -653,8 +653,8 @@ def open_settings(app):
         minkb.grid(row=1, column=1, padx=6, pady=(6, 0))
         _label(grid, "KB", size=9, bg=PANEL).grid(row=1, column=2, sticky="w",
                                                   pady=(6, 0))
-        _label(sc, "Steam's F12 writes JPEG, which can be under 1000 KB at "
-                   "1080p - lower this to about 200 if you capture that way.",
+        _label(sc, "Only skips small images without opening them. A full-"
+                   "screen capture, PNG or JPEG, is well over 100 KB.",
                size=8, fg=MUTED, bg=PANEL, wraplength=560).pack(
             anchor="w", padx=12, pady=(4, 11))
 
