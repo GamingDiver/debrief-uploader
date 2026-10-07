@@ -24,8 +24,15 @@ BUSY = (0xff, 0xd1, 0x66)
 ATTN = (0xa8, 0x41, 0x0e)
 
 _BASE = None
+_NO_LOGO = object()
+
 
 def _base_logo(size):
+    """The app logo at `size` px, or None if the icon file can't be read.
+
+    A multi-size .ico opens at its largest image (256 px), so every size is
+    a downscale.
+    """
     global _BASE
     from PIL import Image
     if _BASE is None:
@@ -33,18 +40,35 @@ def _base_logo(size):
             with Image.open(_res("app.ico")) as src:
                 _BASE = src.convert("RGBA")
         except Exception:
-            _BASE = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+            _BASE = _NO_LOGO
+    if _BASE is _NO_LOGO:
+        return None
     return _BASE.resize((size, size), Image.LANCZOS)
+
+
+def _drawn_mark(colour, size=64):
+    """The original runtime-drawn mark. Used when the logo file is missing,
+    so the tray icon is never a transparent square nobody can find."""
+    from PIL import Image, ImageDraw
+    im = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    d = ImageDraw.Draw(im)
+    d.ellipse([4, 4, 60, 60], fill=(11, 22, 32, 255), outline=colour + (255,), width=5)
+    d.polygon([(32, 18), (44, 44), (32, 37), (20, 44)], fill=colour + (255,))
+    return im
+
 
 def _icon_image(colour):
     """App logo fills the canvas, status dot in the top right corner."""
     from PIL import Image, ImageDraw
     size = 64
     scale = 4
+    logo = _base_logo(size)
+    if logo is None:
+        return _drawn_mark(colour, size)
     im = Image.new("RGBA", (size, size), (0, 0, 0, 0))
 
     # 1. Logo first, 64 px, at x=0, y=0
-    im.alpha_composite(_base_logo(64), (0, 0))
+    im.alpha_composite(logo, (0, 0))
 
     # 2. Dot second, on top of the logo. Radius 15 px, center at x=48, y=16
     dot = Image.new("RGBA", (size * scale, size * scale), (0, 0, 0, 0))

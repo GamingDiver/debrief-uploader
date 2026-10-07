@@ -354,3 +354,35 @@ class TestMenuIsNotStale(unittest.TestCase):
         labels = self._labels()
         self.assertIn("Sign in...", labels)
         self.assertLess(labels.index("Sign in..."), labels.index("Settings..."))
+
+
+class TestTrayIcon(unittest.TestCase):
+    """PR #3 replaced the drawn mark with the app logo plus a status dot."""
+
+    def setUp(self):
+        tray._BASE = None
+
+    def tearDown(self):
+        tray._BASE = None
+
+    def test_icon_file_ships_every_windows_size(self):
+        from PIL import Image
+        with Image.open(ui._res("app.ico")) as im:
+            sizes = set(im.info["sizes"])
+        for want in ((16, 16), (32, 32), (48, 48), (256, 256)):
+            self.assertIn(want, sizes)
+
+    def test_status_dot_is_drawn_over_the_logo(self):
+        im = tray._icon_image(tray.ATTN)
+        self.assertEqual(im.size, (64, 64))
+        self.assertEqual(im.getpixel((48, 16))[:3], tray.ATTN)
+        self.assertGreater(im.getpixel((32, 40))[3], 0, "the logo is there")
+
+    def test_missing_logo_falls_back_to_a_visible_mark(self):
+        real = ui._res
+        try:
+            tray._res = lambda *p: "/nonexistent/app.ico"
+            im = tray._icon_image(tray.WATCH)
+        finally:
+            tray._res = real
+        self.assertIsNotNone(im.getbbox(), "never a fully transparent icon")
