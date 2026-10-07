@@ -30,7 +30,8 @@ def _base_logo(size):
     from PIL import Image
     if _BASE is None:
         try:
-            _BASE = Image.open(_res("app.ico")).convert("RGBA")
+            with Image.open(_res("app.ico")) as src:
+                _BASE = src.convert("RGBA")
         except Exception:
             _BASE = Image.new("RGBA", (size, size), (0, 0, 0, 0))
     return _BASE.resize((size, size), Image.LANCZOS)
