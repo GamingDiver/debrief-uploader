@@ -18,6 +18,8 @@ $args = @(
     "--onefile",
     "--name", "DebriefUploader",
     "--collect-all", "pystray",
+    "--icon", "debrief_uploader\resources\app.ico",
+    "--add-data", "debrief_uploader\resources;resources",
     "--hidden-import", "pystray._win32",
     "--hidden-import", "PIL._tkinter_finder"
 )

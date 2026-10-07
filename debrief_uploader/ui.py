@@ -7,6 +7,7 @@ failure is logged with a pointer at the equivalent command, because a GUI that
 cannot open must not become a dead end.
 """
 import os
+import sys
 import threading
 
 from . import autostart, config, oauth
@@ -68,7 +69,15 @@ def _root(title, w, h):
     _SCALE = max(1.0, r.winfo_fpixels("1i") / 96.0)
     r.geometry("%dx%d" % (min(_px(w), r.winfo_screenwidth() - 40),
                           min(_px(h), r.winfo_screenheight() - 80)))
+    try:
+        r.iconbitmap(_res("app.ico"))
+    except Exception:
+        pass
     return r
+
+def _res(*parts):
+    base = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
+    return os.path.join(base, "resources", *parts)
 
 
 def _label(parent, text, size=10, fg=INK, bold=False, bg=BG, **kw):
