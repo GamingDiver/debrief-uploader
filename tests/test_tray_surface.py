@@ -175,6 +175,19 @@ class TestAutostart(unittest.TestCase):
                 sys.frozen = frozen
         self.assertEqual(cmd, '"C:\\Apps\\DebriefUploader\\DebriefUploader.exe" run --tray --quiet')
 
+    def test_tray_check_names_a_missing_icon(self):
+        """`doctor` on the built exe fails release CI through this."""
+        real = ui._res
+        ui._res = lambda *p: os.path.join(tempfile.gettempdir(), "no-such-dir", *p)
+        try:
+            ok, why = cli.tray_check()
+        finally:
+            ui._res = real
+        if "cannot load" in why:
+            self.skipTest("no tkinter/pystray here: " + why)
+        self.assertFalse(ok)
+        self.assertIn("icon missing", why)
+
     def test_disable_removes_the_entry_and_a_legacy_task(self):
         reg, tasks = self.Reg(), self.Tasks(exists=True)
         autostart.enable(reg=reg, run=tasks)

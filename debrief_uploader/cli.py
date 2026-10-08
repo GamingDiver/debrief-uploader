@@ -179,6 +179,26 @@ def cmd_review(args):
     return 0
 
 
+def tray_check():
+    """Can the tray start? Imports what it needs and finds its icon.
+
+    A PyInstaller build that misses a hidden import or the resources folder
+    only fails when the tray starts, and the installer exe has no console to
+    show why, so release CI runs `doctor` on the built exe and reads this
+    through the exit code."""
+    try:
+        import tkinter  # noqa: F401
+        from PIL import Image  # noqa: F401
+        import pystray  # noqa: F401
+        from .ui import _res
+    except Exception as e:      # any import failure means no tray
+        return False, "cannot load %s" % e
+    ico = _res("app.ico")
+    if not os.path.isfile(ico):
+        return False, "icon missing at %s" % ico
+    return True, "ok"
+
+
 def cmd_doctor(args):
     """One command that answers 'why is nothing happening?'."""
     s, store, client, log = _boot(echo=False)
@@ -186,6 +206,8 @@ def cmd_doctor(args):
     print("Debrief Uploader %s   Python %s   %s"
           % (__import__("debrief_uploader").__version__,
              sys.version.split()[0], config.app_dir()))
+    tray_ok, why = tray_check()
+    print("Tray: %s" % why)
     print("")
     for line in eng.diagnose():
         print(line)
@@ -200,7 +222,8 @@ def cmd_doctor(args):
                     print("  " + line.rstrip())
         except OSError:
             pass
-    return 0
+    # Only Windows ships the tray; elsewhere a missing display is expected.
+    return 1 if (os.name == "nt" and not tray_ok) else 0
 
 
 def _preflight(s, client, log, fatal=True):

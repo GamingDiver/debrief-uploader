@@ -30,4 +30,24 @@ Name: "{autodesktop}\Debrief Uploader"; Filename: "{app}\DebriefUploader.exe"; P
 Name: "desktopicon"; Description: "Create a desktop icon"
 
 [Run]
-Filename: "{app}\DebriefUploader.exe"; Parameters: "run --tray"; Description: "Launch Debrief Uploader"; Flags: nowait postinstall skipifsilent
+; runasoriginaluser: an all-users install runs Setup elevated, and the app
+; must not inherit that.
+Filename: "{app}\DebriefUploader.exe"; Parameters: "run --tray"; Description: "Launch Debrief Uploader"; Flags: nowait postinstall skipifsilent runasoriginaluser
+
+[Code]
+// "Start automatically when I log in" (Settings) writes this HKCU Run value.
+// Remove it on uninstall, but only if it points at THIS exe: a zip install of
+// the same app uses the same value name and must keep starting.
+const
+  RunKey = 'Software\Microsoft\Windows\CurrentVersion\Run';
+  RunName = 'GamingDiver Debrief Uploader';
+
+procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+var
+  Cmd: String;
+begin
+  if CurUninstallStep <> usUninstall then Exit;
+  if RegQueryStringValue(HKCU, RunKey, RunName, Cmd) and
+     (Pos(Lowercase(ExpandConstant('{app}\DebriefUploader.exe')), Lowercase(Cmd)) > 0) then
+    RegDeleteValue(HKCU, RunKey, RunName);
+end;

@@ -54,6 +54,12 @@ class TestCliRunsAsASubprocess(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("debrief-uploader", r.stdout)
 
+    def test_installer_cleans_up_the_same_startup_entry(self):
+        """installer.iss deletes the Run value autostart.py writes, by name."""
+        from debrief_uploader import autostart
+        with open(os.path.join(ROOT, "installer.iss"), encoding="utf-8") as f:
+            self.assertIn("RunName = '%s';" % autostart.NAME, f.read())
+
     def test_status_works(self):
         import shutil
         home = os.path.join(ROOT, ".tmp-home-status")
@@ -74,6 +80,7 @@ class TestCliRunsAsASubprocess(unittest.TestCase):
             self.assertEqual(r.returncode, 0, r.stderr)
             import debrief_uploader
             self.assertIn(debrief_uploader.__version__, r.stdout)
+            self.assertIn("Tray: ", r.stdout)     # release CI reads this on the exe
         finally:
             shutil.rmtree(home, ignore_errors=True)
 

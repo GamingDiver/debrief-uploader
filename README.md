@@ -32,32 +32,43 @@ You need Windows 10 or 11, the game, and a free
 
 ## Quick Install
 
-### 1. Download the Installer
+No Python needed: the installer carries everything.
 
-1. Download `\DebriefUploader_Setup_VERSION.exe` from the 
-[latest release](https://github.com/GamingDiver/debrief-uploader/releases/latest).
-2. **Unblock the Installer before you unzip it.** Windows marks every file
-   downloaded from the internet, and on PCs with **Smart App Control** turned
-   on it then refuses to run the launcher outright ("Smart App Control
-   blocked a file that may be unsafe", with no *Run anyway* button).
-   Right-click `DebriefUploader.zip` -> **Properties** -> at the bottom of the
-   *General* tab, tick **Unblock** -> **OK**. Unblocking the zip first clears
-   every file inside it in one go.
-### Follow the Installer (Detailed steps below)
-3. Decide if you want to install for all users (administrator necessary) or only for yourself
-4. Select the installation folder you want to install into
-5. Select the Start Menu Folder (Recommendation: Leave Default)
-6. Decide if you want to create a desktop icon (Recommended for users that want to start the app themselves)
-7. On the summary review your choices and install
-8. Optional: Start Debrief Uploader
+1. Download `DebriefUploader_Setup_<version>.exe` from the
+   [latest release](https://github.com/GamingDiver/debrief-uploader/releases/latest).
+2. **Unblock it before you run it.** Windows marks every file downloaded
+   from the internet, and on PCs with **Smart App Control** turned on it then
+   refuses to run it outright ("Smart App Control blocked a file that may be
+   unsafe", with no *Run anyway* button). Right-click the installer ->
+   **Properties** -> at the bottom of the *General* tab, tick **Unblock** ->
+   **OK**. If *"Windows protected your PC"* (SmartScreen) appears instead,
+   click **More info**, then **Run anyway**.
+3. Run it and follow the steps. **Install for me only** needs no
+   administrator rights and is the right choice for most people. The
+   defaults are fine; tick *Create a desktop icon* if you want one.
+4. Leave **Launch Debrief Uploader** ticked on the last page and click
+   *Finish*. A **diver icon appears in the system tray** (bottom right; click
+   the `^` arrow if it is hidden).
+5. **The Settings window opens with the folders it found. Check them, then
+   press Start watching**, and **sign in** from the tray icon. Both work
+   exactly as in steps 4 and 5 of [Start it](#3-start-it) below; nothing is
+   read before Start watching and nothing uploads before you sign in.
+6. [Choose who can see your battles](#4-choose-who-can-see-your-battles)
+   and, if you like, [start it with Windows](#5-start-it-in-the-background-with-windows)
+   (the Settings checkbox; the Startup-folder alternative there is for the
+   zip install).
 
-### Quick Update
-To update to the latest version choose one of the following methods: 
-- Run the installer again. Follow [Quick Install](#quick-install) for this
+**Updating:** quit from the tray icon and run the new installer. It installs
+over the old version; your sign-in, settings and upload history carry over.
 
-**OR**
+**Uninstalling:** *Settings -> Apps -> Installed apps -> Debrief Uploader*.
+This also removes its start-at-log-in entry. Your settings and history stay
+in `%LOCALAPPDATA%\GamingDiver\DebriefUploader`; delete that folder too if
+you want them gone.
 
-- Follow the update instructions under [Detailed Install](#detailed-install)
+**Moving from the zip install:** in the old copy, untick *Start automatically
+when I log in* and quit it, then install. Tick the box again in the installed
+copy so log-in starts the installed one.
 
 ## Detailed Install
 
@@ -372,7 +383,7 @@ stall.
 Raising `shot_max_age_hours` is safe; it only widens what gets looked at, and
 matching still refuses anything more than 25 minutes from its battle.
 
-## Requirements
+## Dependencies
 
 `Pillow` (image transform) and `pystray` (tray icon only). Everything else is
 the standard library.
