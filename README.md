@@ -42,9 +42,10 @@ No Python needed: the installer carries everything.
    unsafe", with no *Run anyway* button). Right-click the installer ->
    **Properties** -> at the bottom of the *General* tab, tick **Unblock** ->
    **OK**.
-   - If the option does not appear for you, Smart App Control is most likely disabled for you.
-   - In that case in the *"Windows protected your PC"* (SmartScreen) popup: click **More info**, 
-   then **Run anyway**.
+   - No *Unblock* checkbox? Then Windows did not mark the file and there is
+     nothing to unblock.
+   - If *"Windows protected your PC"* (SmartScreen) appears when you run it,
+     click **More info**, then **Run anyway**.
 3. Run it and follow the steps. **Install for me only** needs no
    administrator rights and is the right choice for most people. The
    defaults are fine; tick *Create a desktop icon* if you want one.
