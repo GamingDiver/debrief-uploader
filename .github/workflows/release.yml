@@ -69,6 +69,9 @@ jobs:
         # no console: it would otherwise pop up a terminal at every log-on
         shell: pwsh
         run: ./Build-Exe.ps1 -NoConsole
+      - name: Check exe exists
+        shell: pwsh
+        run: if (-not (Test-Path dist/DebriefUploader.exe)) { throw "exe missing" }
       - name: Run the built exe
         # A windowed exe: pwsh does not wait for it, and an uncaught error opens
         # a dialog that never closes, so wait with a deadline. `doctor` exits 1
