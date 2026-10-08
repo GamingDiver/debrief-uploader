@@ -235,17 +235,22 @@ class TestWindowsBuild(unittest.TestCase):
         def root(title, w, h):
             r = real_root(title, w, h)
 
+            def walk(w_):
+                # by type, not position: on Windows our own title bar is
+                # the window's first child (winframe), elsewhere it is not
+                for c_ in w_.winfo_children():
+                    yield c_
+                    yield from walk(c_)
+
             def press():
-                btns = [w_ for w_ in r.winfo_children()[0].winfo_children()[1].winfo_children()
-                        if isinstance(w_, tk.Button)]
+                btns = [w_ for w_ in walk(r) if isinstance(w_, tk.Button)]
                 seen["labels"] = [b_.cget("text") for b_ in btns]
                 next(b_ for b_ in btns if provider.title() in b_.cget("text")).invoke()
 
             def check():
                 if not r.winfo_exists():
                     return
-                labels = [w_ for w_ in r.winfo_children()[0].winfo_children()
-                          if isinstance(w_, tk.Label)]
+                labels = [w_ for w_ in walk(r) if isinstance(w_, tk.Label)]
                 seen["msg"] = " ".join(l.cget("text") for l in labels)
                 seen["open"] = True
                 r.destroy()
@@ -314,6 +319,43 @@ class TestWindowsBuild(unittest.TestCase):
         fresh = config.Settings.load()     # re-read from disk
         self.assertEqual(fresh.get("visibility"), "private")
         self.assertTrue(fresh.get("review_mode"))
+
+    @unittest.skipUnless(os.name == "nt", "our own title bar is Windows-only")
+    def test_title_bar_close_saves_like_the_native_x(self):
+        """winframe draws the title bar, so its X must run the same
+        WM_DELETE_WINDOW handler the native one did (save, then close)."""
+        import tkinter as tk
+        from debrief_uploader import config, winframe
+        real_root = self._real_root
+        seen = {}
+
+        def walk(w):
+            yield w
+            for c in w.winfo_children():
+                yield from walk(c)
+
+        def root(title, w, h):
+            r = real_root(title, w, h)
+
+            def act():
+                seen["glyphs"] = [x.cget("text") for x in walk(r)
+                                  if isinstance(x, tk.Label)]
+                cb = next(x for x in walk(r) if isinstance(x, tk.Checkbutton)
+                          and "review mode" in x.cget("text"))
+                cb.invoke()
+                x_ = next(x for x in walk(r) if isinstance(x, tk.Label)
+                          and x.cget("text") == winframe.CLOSE)
+                x_.event_generate("<Button-1>")
+            r.after(300, act)
+            r.after(4000, lambda: r.winfo_exists() and r.destroy())
+            return r
+
+        self.ui._root = root
+        self.ui.open_settings(self.app)
+        self.assertEqual(self.errors, [])
+        for g in (winframe.MINIMIZE, winframe.MAXIMIZE, winframe.CLOSE):
+            self.assertIn(g, seen["glyphs"])
+        self.assertTrue(config.Settings.load().get("review_mode"))
 
     def test_review_window_title_matches_its_contents(self):
         """It used to say "needs you" over a window saying nothing needs you."""
