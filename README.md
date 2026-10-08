@@ -25,10 +25,41 @@ battles:
    link to each battle appears under **Ready for review** in the tray icon's
    **Status...** window.
 
-## Install
+## Requirements
 
 You need Windows 10 or 11, the game, and a free
 [GamingDiver](https://gamingdiver.com) account to upload to.
+
+## Quick Install
+
+### 1. Download the Installer
+
+1. Download `\DebriefUploader_Setup_VERSION.exe` from the 
+[latest release](https://github.com/GamingDiver/debrief-uploader/releases/latest).
+2. **Unblock the Installer before you unzip it.** Windows marks every file
+   downloaded from the internet, and on PCs with **Smart App Control** turned
+   on it then refuses to run the launcher outright ("Smart App Control
+   blocked a file that may be unsafe", with no *Run anyway* button).
+   Right-click `DebriefUploader.zip` -> **Properties** -> at the bottom of the
+   *General* tab, tick **Unblock** -> **OK**. Unblocking the zip first clears
+   every file inside it in one go.
+### Follow the Installer (Detailed steps below)
+3. Decide if you want to install for all users (administrator necessary) or only for yourself
+4. Select the installation folder you want to install into
+5. Select the Start Menu Folder (Recommendation: Leave Default)
+6. Decide if you want to create a desktop icon (Recommended for users that want to start the app themselves)
+7. On the summary review your choices and install
+8. Optional: Start Debrief Uploader
+
+### Quick Update
+To update to the latest version choose one of the following methods: 
+- Run the installer again. Follow [Quick Install](#quick-install) for this
+
+**OR**
+
+- Follow the update instructions under [Detailed Install](#detailed-install)
+
+## Detailed Install
 
 ### 1. Install Python (one time)
 
