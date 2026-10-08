@@ -118,11 +118,22 @@ def _res(*parts):
 
 
 def _label(parent, text, size=10, fg=INK, bold=False, bg=BG, **kw):
+    """A text label. With wraplength, the text wraps at that width OR the
+    parent's, whichever is narrower: a fixed wrap made the text wider than
+    its panel once the window could be resized narrower, and Tk centres an
+    over-wide label, so both edges were cut off (Stargatecraft, PR #6)."""
     import tkinter as tk
+    wrap = None
     if "wraplength" in kw:
-        kw["wraplength"] = _px(kw["wraplength"])
-    return tk.Label(parent, text=text, bg=bg, fg=fg, justify="left",
-                    font=("Segoe UI", size, "bold" if bold else "normal"), **kw)
+        wrap = kw["wraplength"] = _px(kw["wraplength"])
+    lbl = tk.Label(parent, text=text, bg=bg, fg=fg, justify="left",
+                   font=("Segoe UI", size, "bold" if bold else "normal"), **kw)
+    if wrap:
+        def fit(e, lbl=lbl):
+            if e.widget is parent and lbl.winfo_exists():
+                lbl.configure(wraplength=max(_px(120), min(wrap, e.width - _px(28))))
+        parent.bind("<Configure>", fit, add="+")
+    return lbl
 
 
 def _button(parent, text, cmd, primary=False):
@@ -161,9 +172,16 @@ class _ThinScroll:
     rounded thumb on a canvas, that drags, pages on a click outside the
     thumb, and hides when everything fits.
 
+    Visibility follows Firefox's overlay bars (Stargatecraft's suggestion,
+    PR #6): hidden while the mouse is still, a slim low-contrast bar while
+    it moves over the window, bright under the pointer or while dragging.
+    It also shows for a moment when the window opens, which keeps the
+    "there is more below" cue the tester needed.
+
     Use as the target's yscrollcommand: target.configure(yscrollcommand=sb.set)."""
 
-    THUMB, HOVER = "#2a4152", "#3b5970"
+    THUMB, HOVER = "#2a4152", "#c9d6df"
+    LINGER_MS = 1200          # how long the bar stays after the mouse stops
 
     def __init__(self, parent, target, bg=BG):
         import tkinter as tk
@@ -174,6 +192,12 @@ class _ThinScroll:
                            highlightthickness=0)
         self._grab = None        # pointer offset into the thumb while dragging
         self._hover = False
+        self._awake = True       # shown on open, then only while the mouse moves
+        self._sleep_job = None
+        top = parent.winfo_toplevel()
+        for ev in ("<Motion>", "<MouseWheel>"):
+            top.bind(ev, lambda e: self._wake(), add="+")
+        self._wake()
         self.c.bind("<Configure>", lambda e: self._draw())
         self.c.bind("<Button-1>", self._press)
         self.c.bind("<B1-Motion>", self._drag)
@@ -198,10 +222,29 @@ class _ThinScroll:
             y1 = y0 + least
         return y0, y1, h
 
+    def _wake(self):
+        self._awake = True
+        if self._sleep_job:
+            self.c.after_cancel(self._sleep_job)
+        self._sleep_job = self.c.after(self.LINGER_MS, self._sleep)
+        self._draw()
+
+    def _sleep(self):
+        self._sleep_job = None
+        if self._hover or self._grab is not None:
+            self._sleep_job = self.c.after(self.LINGER_MS, self._sleep)
+            return
+        self._awake = False
+        self._draw()
+
     def _draw(self):
+        if not self.c.winfo_exists():
+            return
         self.c.delete("all")
         if self.last - self.first >= 0.999:
             return               # everything fits: no bar at all
+        if not (self._awake or self._hover or self._grab is not None):
+            return               # the mouse is still: out of the way
         y0, y1, _ = self._thumb()
         w, pad = self.width, _px(2)
         # a round-capped line is a pill; the caps add half the width each end

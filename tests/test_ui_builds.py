@@ -391,6 +391,22 @@ class TestWindowsBuild(unittest.TestCase):
         self.assertLessEqual(b, wb)
         self.assertLessEqual(abs((b - t) - min(seen["want"][1], wb - wt)), 2, seen)
 
+    def test_wrapped_text_follows_a_narrower_panel(self):
+        """Resized narrower, a fixed wrap left text wider than its panel and
+        Tk centred it, cutting both edges (Stargatecraft, PR #6)."""
+        import tkinter as tk
+        r = tk.Tk()
+        try:
+            box = tk.Frame(r, width=300, height=100)
+            box.pack(fill="both", expand=True)
+            lbl = self.ui._label(box, "word " * 60, wraplength=560)
+            lbl.pack(anchor="w")
+            r.geometry("300x200")
+            r.update()
+            self.assertLess(int(str(lbl.cget("wraplength"))), self.ui._px(300))
+        finally:
+            r.destroy()
+
     def test_thin_scrollbar_shows_only_when_there_is_more(self):
         """The settings body overflowed at 150% and a tester never found the
         sections below; the slim bar is the cue. It must appear when the
@@ -409,6 +425,10 @@ class TestWindowsBuild(unittest.TestCase):
             t.insert("end", "line\n" * 200)
             r.update()
             self.assertNotEqual(sb.c.find_all(), ())       # overflows: bar
+            sb._sleep()                                    # mouse went still
+            self.assertEqual(sb.c.find_all(), ())
+            sb._wake()                                     # mouse moved
+            self.assertNotEqual(sb.c.find_all(), ())
             h = sb.c.winfo_height()
             sb._press(type("E", (), {"y": h - 2})())       # click near the end
             sb._release(None)
