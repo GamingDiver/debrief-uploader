@@ -96,12 +96,16 @@ def _root(title, w, h):
             pass
 
     def show():
-        _place(r)
+        # the title bar first: once the native one is gone the client area
+        # is the whole window, so the size set AFTER it is the outer size.
+        # Placed first, the window came out a caption taller than asked and
+        # its footer slid under the taskbar (CI screenshot, 2026-10-08).
         if os.name == "nt":
             try:
                 winframe.finish(r, _px)
             except Exception:
                 pass
+        _place(r)
         r.deiconify()
 
     r.after(30, show)
@@ -160,11 +164,29 @@ def _set_size(r, w, h):
     r._wh = (int(w), int(h))
 
 
+def _work_area(r):
+    """Left, top, right, bottom of the screen minus the taskbar."""
+    if os.name == "nt":
+        try:
+            import ctypes
+            from ctypes import wintypes
+            rc = wintypes.RECT()
+            if ctypes.windll.user32.SystemParametersInfoW(0x30, 0, ctypes.byref(rc), 0):
+                return rc.left, rc.top, rc.right, rc.bottom   # SPI_GETWORKAREA
+        except Exception:
+            pass
+    return 0, 0, r.winfo_screenwidth(), r.winfo_screenheight()
+
+
 def _place(r):
-    """Centre on the screen at the size _set_size() asked for."""
+    """Centre in the work area at the size _set_size() asked for, never
+    larger than it: a window taller than the space above the taskbar hides
+    its own footer (Done, the save note)."""
+    left, top, right, bottom = _work_area(r)
     w, h = r._wh
-    x = (r.winfo_screenwidth() - w) // 2
-    y = (r.winfo_screenheight() - h) // 2
+    w, h = min(w, right - left), min(h, bottom - top)
+    x = left + (right - left - w) // 2
+    y = top + (bottom - top - h) // 2
     r.geometry("%dx%d+%d+%d" % (w, h, x, y))
 
 

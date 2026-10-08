@@ -357,6 +357,40 @@ class TestWindowsBuild(unittest.TestCase):
             self.assertIn(g, seen["glyphs"])
         self.assertTrue(config.Settings.load().get("review_mode"))
 
+    @unittest.skipUnless(os.name == "nt", "work area + window rect are Win32")
+    def test_window_fits_above_the_taskbar_at_the_size_asked(self):
+        """The outer window is the size _set_size() asked for and sits inside
+        the work area. With the native title bar removed AFTER placing, it
+        came out a caption taller and the footer went under the taskbar."""
+        import ctypes
+        from ctypes import wintypes
+        real_root = self._real_root
+        seen = {}
+
+        def root(title, w, h):
+            r = real_root(title, w, h)
+
+            def measure():
+                u = ctypes.windll.user32
+                u.GetParent.restype = wintypes.HWND
+                rc = wintypes.RECT()
+                u.GetWindowRect(u.GetParent(r.winfo_id()), ctypes.byref(rc))
+                seen["rect"] = (rc.left, rc.top, rc.right, rc.bottom)
+                seen["want"] = r._wh
+                seen["work"] = self.ui._work_area(r)
+                r.destroy()
+            r.after(500, measure)
+            return r
+
+        self.ui._root = root
+        self.ui.open_settings(self.app)
+        self.assertEqual(self.errors, [])
+        l, t, rt, b = seen["rect"]
+        wl, wt, wr, wb = seen["work"]
+        self.assertGreaterEqual(t, wt)
+        self.assertLessEqual(b, wb)
+        self.assertLessEqual(abs((b - t) - min(seen["want"][1], wb - wt)), 2, seen)
+
     def test_review_window_title_matches_its_contents(self):
         """It used to say "needs you" over a window saying nothing needs you."""
         titles = []
