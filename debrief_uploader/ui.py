@@ -145,12 +145,103 @@ def _section(parent, title):
     return box
 
 
+class _ThinScroll:
+    """A slim scrollbar in the app's colours, shown only while there is
+    something to scroll.
+
+    Why not none: the Settings scrollbar exists because a tester at 150%
+    scaling never found the sections below the fold -- the window ended at
+    the review checkbox, and Save and Startup were simply never seen. With
+    the bar hidden the only cue left is a section peeking out at the bottom,
+    and only if the window happens to cut one off. Why not tk.Scrollbar:
+    Windows draws it natively and ignores its colours, so it was the one
+    light-grey thing in a dark window (PR #6 removed it for that reason).
+    A ttk style could recolour it, but a theme change is per Tk root and
+    would also restyle Settings' OptionMenus. So it is drawn here: a
+    rounded thumb on a canvas, that drags, pages on a click outside the
+    thumb, and hides when everything fits.
+
+    Use as the target's yscrollcommand: target.configure(yscrollcommand=sb.set)."""
+
+    THUMB, HOVER = "#2a4152", "#3b5970"
+
+    def __init__(self, parent, target, bg=BG):
+        import tkinter as tk
+        self.target = target
+        self.first, self.last = 0.0, 1.0
+        self.width = _px(8)
+        self.c = tk.Canvas(parent, width=self.width, bg=bg, bd=0,
+                           highlightthickness=0)
+        self._grab = None        # pointer offset into the thumb while dragging
+        self._hover = False
+        self.c.bind("<Configure>", lambda e: self._draw())
+        self.c.bind("<Button-1>", self._press)
+        self.c.bind("<B1-Motion>", self._drag)
+        self.c.bind("<ButtonRelease-1>", self._release)
+        self.c.bind("<Enter>", lambda e: self._set_hover(True))
+        self.c.bind("<Leave>", lambda e: self._set_hover(False))
+
+    def pack(self, **kw):
+        self.c.pack(**kw)
+
+    def set(self, first, last):
+        self.first, self.last = float(first), float(last)
+        self._draw()
+
+    def _thumb(self):
+        h = max(1, self.c.winfo_height())
+        y0, y1 = self.first * h, self.last * h
+        least = _px(28)          # never a sliver too small to grab
+        if y1 - y0 < least:
+            mid = (y0 + y1) / 2
+            y0 = min(max(0, mid - least / 2), h - least)
+            y1 = y0 + least
+        return y0, y1, h
+
+    def _draw(self):
+        self.c.delete("all")
+        if self.last - self.first >= 0.999:
+            return               # everything fits: no bar at all
+        y0, y1, _ = self._thumb()
+        w, pad = self.width, _px(2)
+        # a round-capped line is a pill; the caps add half the width each end
+        self.c.create_line(w / 2, y0 + w / 2 + pad, w / 2, y1 - w / 2 - pad,
+                           width=w - pad, capstyle="round",
+                           fill=self.HOVER if (self._hover or self._grab is not None)
+                           else self.THUMB)
+
+    def _set_hover(self, on):
+        self._hover = on
+        self._draw()
+
+    def _press(self, e):
+        y0, y1, h = self._thumb()
+        if not (y0 <= e.y <= y1):    # outside the thumb: centre it there
+            span = self.last - self.first
+            self.target.yview_moveto(max(0.0, e.y / h - span / 2))
+            y0, y1, h = self._thumb()
+        self._grab = e.y - y0
+
+    def _drag(self, e):
+        if self._grab is None:
+            return
+        h = max(1, self.c.winfo_height())
+        self.target.yview_moveto(max(0.0, (e.y - self._grab) / h))
+
+    def _release(self, e):
+        self._grab = None
+        self._draw()
+
+
 def _text_window(title, lines, log, what):
     def build():
         import tkinter as tk
         r = _root(title, 760, 560)
         t = tk.Text(r, bg=PANEL, fg=INK, insertbackground=INK, relief="flat",
                     font=("Consolas", 9), wrap="none", padx=12, pady=10)
+        sb = _ThinScroll(r, t, bg=PANEL)
+        t.configure(yscrollcommand=sb.set)
+        sb.pack(side="right", fill="y")
         t.pack(fill="both", expand=True)
         t.insert("1.0", "\n".join(lines))
         t.configure(state="disabled")
@@ -222,6 +313,9 @@ def open_status(app):
         t = tk.Text(r, bg=PANEL, fg=INK, relief="flat", font=("Segoe UI", 10),
                     wrap="word", padx=14, pady=12, cursor="arrow",
                     highlightthickness=0)
+        sb = _ThinScroll(r, t)
+        t.configure(yscrollcommand=sb.set)
+        sb.pack(side="right", fill="y", padx=(_px(4), _px(6)), pady=(0, 14))
         t.pack(fill="both", expand=True, padx=(16, 0), pady=(0, 14))
 
         t.tag_configure("h", foreground=MUTED, font=("Segoe UI", 8, "bold"),
@@ -543,6 +637,9 @@ def open_settings(app):
         foot = tk.Frame(r, bg=BG)
         foot.pack(side="bottom", fill="x", padx=16, pady=(4, 12))
         canvas = tk.Canvas(r, bg=BG, highlightthickness=0)
+        vbar = _ThinScroll(r, canvas)
+        canvas.configure(yscrollcommand=vbar.set)
+        vbar.pack(side="right", fill="y", padx=(0, _px(4)))
         canvas.pack(side="left", fill="both", expand=True)
         outer = tk.Frame(canvas, bg=BG)
         win = canvas.create_window((16, 14), window=outer, anchor="nw")

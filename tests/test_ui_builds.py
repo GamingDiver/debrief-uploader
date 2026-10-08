@@ -391,6 +391,32 @@ class TestWindowsBuild(unittest.TestCase):
         self.assertLessEqual(b, wb)
         self.assertLessEqual(abs((b - t) - min(seen["want"][1], wb - wt)), 2, seen)
 
+    def test_thin_scrollbar_shows_only_when_there_is_more(self):
+        """The settings body overflowed at 150% and a tester never found the
+        sections below; the slim bar is the cue. It must appear when the
+        content overflows, vanish when it fits, and move the view."""
+        import tkinter as tk
+        r = tk.Tk()
+        try:
+            t = tk.Text(r, height=5)
+            sb = self.ui._ThinScroll(r, t)
+            t.configure(yscrollcommand=sb.set)
+            sb.pack(side="right", fill="y")
+            t.pack(fill="both", expand=True)
+            t.insert("1.0", "line\n" * 3)
+            r.update()
+            self.assertEqual(sb.c.find_all(), ())          # fits: no bar
+            t.insert("end", "line\n" * 200)
+            r.update()
+            self.assertNotEqual(sb.c.find_all(), ())       # overflows: bar
+            h = sb.c.winfo_height()
+            sb._press(type("E", (), {"y": h - 2})())       # click near the end
+            sb._release(None)
+            r.update()
+            self.assertGreater(t.yview()[0], 0.5)
+        finally:
+            r.destroy()
+
     def test_review_window_title_matches_its_contents(self):
         """It used to say "needs you" over a window saying nothing needs you."""
         titles = []
