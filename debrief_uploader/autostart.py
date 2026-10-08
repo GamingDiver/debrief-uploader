@@ -65,7 +65,13 @@ def _pythonw():
 
 def command():
     """By absolute path to app.py: a Run entry has no working directory, and
-    app.py puts its own folder on sys.path, so the package is found anyway."""
+    app.py puts its own folder on sys.path, so the package is found anyway.
+
+    A built DebriefUploader.exe is the whole app. Its app.py lives in a
+    PyInstaller temp folder that is deleted on exit, and the exe would read
+    that path as an unknown subcommand, so the entry names the exe alone."""
+    if getattr(sys, "frozen", False):
+        return '"%s" run --tray --quiet' % sys.executable
     app_py = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                           "app.py")
     return '"%s" "%s" run --tray --quiet' % (_pythonw(), app_py)

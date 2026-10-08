@@ -161,6 +161,20 @@ class TestAutostart(unittest.TestCase):
         self.assertFalse(any("/Create" in c for c in tasks.calls))   # no schtasks
         self.assertTrue(autostart.is_enabled(reg=reg, run=tasks))
 
+    def test_built_exe_entry_names_the_exe_alone(self):
+        """In the PyInstaller exe, app.py sits in a temp folder deleted on exit."""
+        frozen, exe = getattr(sys, "frozen", None), sys.executable
+        sys.frozen, sys.executable = True, r"C:\Apps\DebriefUploader\DebriefUploader.exe"
+        try:
+            cmd = autostart.command()
+        finally:
+            sys.executable = exe
+            if frozen is None:
+                del sys.frozen
+            else:
+                sys.frozen = frozen
+        self.assertEqual(cmd, '"C:\\Apps\\DebriefUploader\\DebriefUploader.exe" run --tray --quiet')
+
     def test_disable_removes_the_entry_and_a_legacy_task(self):
         reg, tasks = self.Reg(), self.Tasks(exists=True)
         autostart.enable(reg=reg, run=tasks)
