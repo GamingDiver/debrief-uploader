@@ -357,6 +357,43 @@ class TestWindowsBuild(unittest.TestCase):
             self.assertIn(g, seen["glyphs"])
         self.assertTrue(config.Settings.load().get("review_mode"))
 
+    @unittest.skipUnless(os.name == "nt", "our own title bar is Windows-only")
+    def test_every_corner_resizes_and_maximized_x_reaches_the_corner(self):
+        """All four corners carry a resize grip (top right was missing,
+        Stargatecraft, PR #6). Maximized, the grips step aside so the
+        corner pixel belongs to the X."""
+        import tkinter as tk
+        from debrief_uploader import winframe
+        real_root = self._real_root
+        seen = {}
+
+        def root(title, w, h):
+            r = real_root(title, w, h)
+
+            def at(dx, dy):
+                r.update()
+                x = r.winfo_rootx() + (r.winfo_width() - 1 if dx else 0)
+                y = r.winfo_rooty() + (r.winfo_height() - 1 if dy else 0)
+                return r.winfo_containing(x, y)
+
+            def probe():
+                seen["codes"] = [getattr(at(dx, dy), "_code", None)
+                                 for dx, dy in ((0, 0), (1, 0), (0, 1), (1, 1))]
+                r.state("zoomed")
+                r.update()
+                top_right = at(1, 0)
+                seen["zoomed_top_right"] = (isinstance(top_right, tk.Label)
+                                            and top_right.cget("text"))
+                r.destroy()
+            r.after(500, probe)
+            return r
+
+        self.ui._root = root
+        self.ui.open_settings(self.app)
+        self.assertEqual(self.errors, [])
+        self.assertEqual(seen["codes"], [4, 5, 7, 8])
+        self.assertEqual(seen["zoomed_top_right"], winframe.CLOSE)
+
     @unittest.skipUnless(os.name == "nt", "work area + window rect are Win32")
     def test_window_fits_above_the_taskbar_at_the_size_asked(self):
         """The outer window is the size _set_size() asked for and sits inside

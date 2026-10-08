@@ -183,8 +183,8 @@ def frame(r, title, px, bg, icon, fg="#cfd8dc"):
     def grip(cursor, code, **where):
         g = tk.Frame(r, bg=bg, cursor=cursor)
         g.place(**where)
-        g.bind("<Button-1>",
-               lambda e: size_from(code) if r.state() != "zoomed" else None)
+        g._code, g._where = code, where
+        g.bind("<Button-1>", lambda e: size_from(code))
         r._grips.append(g)
 
     # left edge and top left corner
@@ -199,6 +199,31 @@ def frame(r, title, px, bg, icon, fg="#cfd8dc"):
     grip("size_ns", 6, x=c, rely=1, y=-b, relwidth=1, width=-2 * c, height=b)
     grip("size_ne_sw", 7, x=0, rely=1, y=-c, width=c, height=c)
     grip("size_nw_se", 8, relx=1, x=-c, rely=1, y=-c, width=c, height=c)
+    # top right corner: a thin L over the close button's outer edge, so the
+    # X stays clickable but the corner resizes like the other three
+    # (Stargatecraft found it missing, PR #6)
+    grip("size_ne_sw", 5, relx=1, x=-c, y=0, width=c, height=b)
+    grip("size_ne_sw", 5, relx=1, x=-b, y=0, width=b, height=c)
+
+    # Maximized, nothing resizes, and the grips would only steal clicks from
+    # the buttons' outer edge: at the screen corner that is where the
+    # pointer lands when you fling it at the X.
+    shown = [True]
+
+    def zoom_grips(e):
+        if e.widget is not r:
+            return
+        want = r.state() != "zoomed"
+        if want == shown[0]:
+            return
+        shown[0] = want
+        for g in r._grips:
+            if want:
+                g.place(**g._where)
+                g.lift()
+            else:
+                g.place_forget()
+    r.bind("<Configure>", zoom_grips, add="+")
 
 
 def set_icon(r, path):
