@@ -42,6 +42,16 @@ def _thread(fn, log, what):
         except Exception as e:
             log.error("could not open %s (%s) - the same thing is available "
                       "from Debrief.cmd" % (what, e))
+        finally:
+            # Free this window's Tk objects HERE, on the thread that made
+            # them. Widgets, bindings, images and variables that reference
+            # each other in cycles outlive the window and are otherwise freed
+            # by the cyclic GC on whichever thread runs next - and freeing a
+            # Tcl interpreter from the wrong thread aborts the whole app:
+            # "Tcl_AsyncDelete: async handler deleted by the wrong thread"
+            # (Stargatecraft, 2026-10-09). tests/test_ui_threads.py.
+            import gc
+            gc.collect()
     threading.Thread(target=go, daemon=True).start()
 
 
