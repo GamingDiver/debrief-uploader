@@ -125,18 +125,28 @@ def frame(r, title, px, bg, icon, fg="#cfd8dc"):
 
     btns = []
 
-    def button(glyph, cmd, hover="#1b2f3d"):
+    # the top-right grips sit over the close button's outer edge; they take
+    # its colour so a hovered X is one red square, not a red square with a
+    # dark L notched out of its corner (Stargatecraft, PR #6, at 150%)
+    corner = []
+
+    def button(glyph, cmd, hover="#1b2f3d", tint_corner=False):
         b = tk.Label(bar, text=glyph, bg=bg, fg=fg, width=5,
                      font=("Segoe MDL2 Assets", 8))
         b.pack(side="right", fill="y")
         btns.append(b)
         b.bind("<Button-1>", lambda e: cmd())
-        b.bind("<Enter>", lambda e: b.configure(
-            bg=hover, fg="white" if hover != "#1b2f3d" else fg))
-        b.bind("<Leave>", lambda e: b.configure(bg=bg, fg=fg))
+
+        def paint(colour, ink):
+            b.configure(bg=colour, fg=ink)
+            if tint_corner:
+                for g in corner:
+                    g.configure(bg=colour)
+        b.bind("<Enter>", lambda e: paint(hover, "white" if hover != "#1b2f3d" else fg))
+        b.bind("<Leave>", lambda e: paint(bg, fg))
         return b
 
-    button(CLOSE, lambda: _close(r), hover="#c42b1c")   # close
+    button(CLOSE, lambda: _close(r), hover="#c42b1c", tint_corner=True)   # close
     maxbtn = button(MAXIMIZE, toggle_max)                  # maximize
     button(MINIMIZE, r.iconify)                            # minimize
 
@@ -204,6 +214,7 @@ def frame(r, title, px, bg, icon, fg="#cfd8dc"):
     # (Stargatecraft found it missing, PR #6)
     grip("size_ne_sw", 5, relx=1, x=-c, y=0, width=c, height=b)
     grip("size_ne_sw", 5, relx=1, x=-b, y=0, width=b, height=c)
+    corner.extend(r._grips[-2:])
 
     # Maximized, nothing resizes, and the grips would only steal clicks from
     # the buttons' outer edge: at the screen corner that is where the

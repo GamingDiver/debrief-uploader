@@ -49,7 +49,8 @@ def _thread(fn, log, what):
             # by the cyclic GC on whichever thread runs next - and freeing a
             # Tcl interpreter from the wrong thread aborts the whole app:
             # "Tcl_AsyncDelete: async handler deleted by the wrong thread"
-            # (Stargatecraft, 2026-10-09). tests/test_ui_threads.py.
+            # (Stargatecraft, PR #6: Status closed, then Settings opened).
+            # tests/test_ui_threads.py reproduces it.
             import gc
             gc.collect()
     threading.Thread(target=go, daemon=True).start()

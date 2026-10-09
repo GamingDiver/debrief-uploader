@@ -474,6 +474,39 @@ class TestWindowsBuild(unittest.TestCase):
         finally:
             r.destroy()
 
+    @unittest.skipUnless(os.name == "nt", "our own title bar is Windows-only")
+    def test_hovered_close_is_one_red_square(self):
+        """The top-right resize grips sit over the X's outer edge; hovered,
+        they must turn the X's red too, or the corner shows a dark notch
+        (Stargatecraft, PR #6, 150% scaling)."""
+        import tkinter as tk
+        from debrief_uploader import winframe
+        real_root = self._real_root
+        seen = {}
+
+        def root(title, w, h):
+            r = real_root(title, w, h)
+
+            def act():
+                x = [w_ for w_ in r.winfo_children()[0].winfo_children()
+                     if isinstance(w_, tk.Label) and w_.cget("text") == winframe.CLOSE][0]
+                x.event_generate("<Enter>")
+                r.update()
+                seen["x"] = x.cget("bg")
+                seen["grips"] = [g.cget("bg") for g in r._grips[-2:]]
+                x.event_generate("<Leave>")
+                r.update()
+                seen["after"] = [g.cget("bg") for g in r._grips[-2:]]
+                r.destroy()
+            r.after(400, act)
+            return r
+
+        self.ui._root = root
+        self.ui.open_settings(self.app)
+        self.assertEqual(self.errors, [])
+        self.assertEqual(seen["grips"], [seen["x"]] * 2)
+        self.assertNotEqual(seen["after"][0], seen["x"])
+
     def test_review_window_title_matches_its_contents(self):
         """It used to say "needs you" over a window saying nothing needs you."""
         titles = []
