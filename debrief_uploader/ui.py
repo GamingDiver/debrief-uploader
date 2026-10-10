@@ -49,7 +49,8 @@ def _thread(fn, log, what):
             # by the cyclic GC on whichever thread runs next - and freeing a
             # Tcl interpreter from the wrong thread aborts the whole app:
             # "Tcl_AsyncDelete: async handler deleted by the wrong thread"
-            # (Stargatecraft, 2026-10-09). tests/test_ui_threads.py.
+            # (Stargatecraft, PR #6: Status closed, then Settings opened).
+            # tests/test_ui_threads.py reproduces it.
             import gc
             gc.collect()
     threading.Thread(target=go, daemon=True).start()
@@ -67,23 +68,50 @@ _SCALE = 1.0
 def _px(n):
     return int(round(n * _SCALE))
 
-
 def _root(title, w, h):
     import tkinter as tk
     global _SCALE
     r = tk.Tk()
+    # built hidden, then sized, placed and shown in one go: no flash of a
+    # default-sized window jumping to the centre
+    r.withdraw()
     r.title(title)
     r.configure(bg=BG)
     # 96 px per inch is 100% on Windows; never shrink below it (macOS
     # reports 72).
     _SCALE = max(1.0, r.winfo_fpixels("1i") / 96.0)
-    r.geometry("%dx%d" % (min(_px(w), r.winfo_screenwidth() - 40),
-                          min(_px(h), r.winfo_screenheight() - 80)))
-    try:
-        r.iconbitmap(_res("app.ico"))
-    except Exception:
-        pass
+    _set_size(r, min(_px(w), r.winfo_screenwidth() - 40),
+              min(_px(h), r.winfo_screenheight() - 80))
+    r.minsize(_px(360), _px(240))
+    if os.name == "nt":
+        from . import winframe
+        try:
+            winframe.frame(r, title, _px, BG, _res("app.ico"))
+        except Exception:
+            pass                # plain native title bar
+        winframe.set_icon(r, _res("app.ico"))
+    else:
+        try:
+            r.iconbitmap(_res("app.ico"))
+        except Exception:
+            pass
+
+    def show():
+        # the title bar first: once the native one is gone the client area
+        # is the whole window, so the size set AFTER it is the outer size.
+        # Placed first, the window came out a caption taller than asked and
+        # its footer slid under the taskbar (CI screenshot, 2026-10-08).
+        if os.name == "nt":
+            try:
+                winframe.finish(r, _px)
+            except Exception:
+                pass
+        _place(r)
+        r.deiconify()
+
+    r.after(30, show)
     return r
+
 
 def _res(*parts):
     base = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
@@ -91,11 +119,22 @@ def _res(*parts):
 
 
 def _label(parent, text, size=10, fg=INK, bold=False, bg=BG, **kw):
+    """A text label. With wraplength, the text wraps at that width OR the
+    parent's, whichever is narrower: a fixed wrap made the text wider than
+    its panel once the window could be resized narrower, and Tk centres an
+    over-wide label, so both edges were cut off (Stargatecraft, PR #6)."""
     import tkinter as tk
+    wrap = None
     if "wraplength" in kw:
-        kw["wraplength"] = _px(kw["wraplength"])
-    return tk.Label(parent, text=text, bg=bg, fg=fg, justify="left",
-                    font=("Segoe UI", size, "bold" if bold else "normal"), **kw)
+        wrap = kw["wraplength"] = _px(kw["wraplength"])
+    lbl = tk.Label(parent, text=text, bg=bg, fg=fg, justify="left",
+                   font=("Segoe UI", size, "bold" if bold else "normal"), **kw)
+    if wrap:
+        def fit(e, lbl=lbl):
+            if e.widget is parent and lbl.winfo_exists():
+                lbl.configure(wraplength=max(_px(120), min(wrap, e.width - _px(28))))
+        parent.bind("<Configure>", fit, add="+")
+    return lbl
 
 
 def _button(parent, text, cmd, primary=False):
@@ -118,13 +157,133 @@ def _section(parent, title):
     return box
 
 
+class _ThinScroll:
+    """A slim scrollbar in the app's colours, shown only while there is
+    something to scroll.
+
+    Why not none: the Settings scrollbar exists because a tester at 150%
+    scaling never found the sections below the fold -- the window ended at
+    the review checkbox, and Save and Startup were simply never seen. With
+    the bar hidden the only cue left is a section peeking out at the bottom,
+    and only if the window happens to cut one off. Why not tk.Scrollbar:
+    Windows draws it natively and ignores its colours, so it was the one
+    light-grey thing in a dark window (PR #6 removed it for that reason).
+    A ttk style could recolour it, but a theme change is per Tk root and
+    would also restyle Settings' OptionMenus. So it is drawn here: a
+    rounded thumb on a canvas, that drags, pages on a click outside the
+    thumb, and hides when everything fits.
+
+    Visibility follows Firefox's overlay bars (Stargatecraft's suggestion,
+    PR #6): hidden while the mouse is still, a slim low-contrast bar while
+    it moves over the window, bright under the pointer or while dragging.
+    It also shows for a moment when the window opens, which keeps the
+    "there is more below" cue the tester needed.
+
+    Use as the target's yscrollcommand: target.configure(yscrollcommand=sb.set)."""
+
+    THUMB, HOVER = "#2a4152", "#c9d6df"
+    LINGER_MS = 1200          # how long the bar stays after the mouse stops
+
+    def __init__(self, parent, target, bg=BG):
+        import tkinter as tk
+        self.target = target
+        self.first, self.last = 0.0, 1.0
+        self.width = _px(8)
+        self.c = tk.Canvas(parent, width=self.width, bg=bg, bd=0,
+                           highlightthickness=0)
+        self._grab = None        # pointer offset into the thumb while dragging
+        self._hover = False
+        self._awake = True       # shown on open, then only while the mouse moves
+        self._sleep_job = None
+        top = parent.winfo_toplevel()
+        for ev in ("<Motion>", "<MouseWheel>"):
+            top.bind(ev, lambda e: self._wake(), add="+")
+        self._wake()
+        self.c.bind("<Configure>", lambda e: self._draw())
+        self.c.bind("<Button-1>", self._press)
+        self.c.bind("<B1-Motion>", self._drag)
+        self.c.bind("<ButtonRelease-1>", self._release)
+        self.c.bind("<Enter>", lambda e: self._set_hover(True))
+        self.c.bind("<Leave>", lambda e: self._set_hover(False))
+
+    def pack(self, **kw):
+        self.c.pack(**kw)
+
+    def set(self, first, last):
+        self.first, self.last = float(first), float(last)
+        self._draw()
+
+    def _thumb(self):
+        h = max(1, self.c.winfo_height())
+        y0, y1 = self.first * h, self.last * h
+        least = _px(28)          # never a sliver too small to grab
+        if y1 - y0 < least:
+            mid = (y0 + y1) / 2
+            y0 = min(max(0, mid - least / 2), h - least)
+            y1 = y0 + least
+        return y0, y1, h
+
+    def _wake(self):
+        self._awake = True
+        if self._sleep_job:
+            self.c.after_cancel(self._sleep_job)
+        self._sleep_job = self.c.after(self.LINGER_MS, self._sleep)
+        self._draw()
+
+    def _sleep(self):
+        self._sleep_job = None
+        if self._hover or self._grab is not None:
+            self._sleep_job = self.c.after(self.LINGER_MS, self._sleep)
+            return
+        self._awake = False
+        self._draw()
+
+    def _draw(self):
+        if not self.c.winfo_exists():
+            return
+        self.c.delete("all")
+        if self.last - self.first >= 0.999:
+            return               # everything fits: no bar at all
+        if not (self._awake or self._hover or self._grab is not None):
+            return               # the mouse is still: out of the way
+        y0, y1, _ = self._thumb()
+        w, pad = self.width, _px(2)
+        # a round-capped line is a pill; the caps add half the width each end
+        self.c.create_line(w / 2, y0 + w / 2 + pad, w / 2, y1 - w / 2 - pad,
+                           width=w - pad, capstyle="round",
+                           fill=self.HOVER if (self._hover or self._grab is not None)
+                           else self.THUMB)
+
+    def _set_hover(self, on):
+        self._hover = on
+        self._draw()
+
+    def _press(self, e):
+        y0, y1, h = self._thumb()
+        if not (y0 <= e.y <= y1):    # outside the thumb: centre it there
+            span = self.last - self.first
+            self.target.yview_moveto(max(0.0, e.y / h - span / 2))
+            y0, y1, h = self._thumb()
+        self._grab = e.y - y0
+
+    def _drag(self, e):
+        if self._grab is None:
+            return
+        h = max(1, self.c.winfo_height())
+        self.target.yview_moveto(max(0.0, (e.y - self._grab) / h))
+
+    def _release(self, e):
+        self._grab = None
+        self._draw()
+
+
 def _text_window(title, lines, log, what):
     def build():
         import tkinter as tk
         r = _root(title, 760, 560)
         t = tk.Text(r, bg=PANEL, fg=INK, insertbackground=INK, relief="flat",
                     font=("Consolas", 9), wrap="none", padx=12, pady=10)
-        sb = tk.Scrollbar(r, command=t.yview, bg=BG)
+        sb = _ThinScroll(r, t, bg=PANEL)
         t.configure(yscrollcommand=sb.set)
         sb.pack(side="right", fill="y")
         t.pack(fill="both", expand=True)
@@ -132,6 +291,38 @@ def _text_window(title, lines, log, what):
         t.configure(state="disabled")
         r.mainloop()
     _thread(build, log, what)
+
+
+def _set_size(r, w, h):
+    """Size in pixels, applied with the position when the window is shown
+    (_root). Windows call this instead of r.geometry()."""
+    r._wh = (int(w), int(h))
+
+
+def _work_area(r):
+    """Left, top, right, bottom of the screen minus the taskbar."""
+    if os.name == "nt":
+        try:
+            import ctypes
+            from ctypes import wintypes
+            rc = wintypes.RECT()
+            if ctypes.windll.user32.SystemParametersInfoW(0x30, 0, ctypes.byref(rc), 0):
+                return rc.left, rc.top, rc.right, rc.bottom   # SPI_GETWORKAREA
+        except Exception:
+            pass
+    return 0, 0, r.winfo_screenwidth(), r.winfo_screenheight()
+
+
+def _place(r):
+    """Centre in the work area at the size _set_size() asked for, never
+    larger than it: a window taller than the space above the taskbar hides
+    its own footer (Done, the save note)."""
+    left, top, right, bottom = _work_area(r)
+    w, h = r._wh
+    w, h = min(w, right - left), min(h, bottom - top)
+    x = left + (right - left - w) // 2
+    y = top + (bottom - top - h) // 2
+    r.geometry("%dx%d+%d+%d" % (w, h, x, y))
 
 
 # ---------------------------------------------------------------- status ----
@@ -166,9 +357,9 @@ def open_status(app):
         t = tk.Text(r, bg=PANEL, fg=INK, relief="flat", font=("Segoe UI", 10),
                     wrap="word", padx=14, pady=12, cursor="arrow",
                     highlightthickness=0)
-        sb = tk.Scrollbar(r, command=t.yview, bg=BG)
+        sb = _ThinScroll(r, t)
         t.configure(yscrollcommand=sb.set)
-        sb.pack(side="right", fill="y")
+        sb.pack(side="right", fill="y", padx=(_px(4), _px(6)), pady=(0, 14))
         t.pack(fill="both", expand=True, padx=(16, 0), pady=(0, 14))
 
         t.tag_configure("h", foreground=MUTED, font=("Segoe UI", 8, "bold"),
@@ -429,7 +620,7 @@ def open_review(app, on_change=None):
                     with Image.open(sh["path"]) as im:
                         im = im.convert("RGB")
                         im.thumbnail((150, 84))
-                        ph = ImageTk.PhotoImage(im)
+                        ph = ImageTk.PhotoImage(im, master=r)
                 except Exception:
                     continue
                 thumbs.append(ph)
@@ -455,7 +646,7 @@ def open_review(app, on_change=None):
             others = [o for o in waiting if o["md5"] != md5]
             if others:
                 lut = {app.eng._label(o): o["md5"] for o in others}
-                var = tk.StringVar(value="give the screenshots to...")
+                var = tk.StringVar(r, value="give the screenshots to...")
 
                 def move(choice, m=md5, lut=lut, b=box):
                     if choice in lut:
@@ -484,15 +675,15 @@ def open_settings(app):
         # scaling applies (a tester at 150% saw it end at the review checkbox,
         # Save and Startup cut off, so nothing he changed was kept). The body
         # scrolls, the window fits the screen, and every change saves itself.
-        r.geometry("%dx%d" % (min(_px(640), r.winfo_screenwidth() - 40),
-                              max(min(_px(480), r.winfo_screenheight() - 120),
-                                  min(_px(900), r.winfo_screenheight() - 120))))
+        _set_size(r, min(_px(640), r.winfo_screenwidth() - 40),
+                  max(min(_px(480), r.winfo_screenheight() - 120),
+                      min(_px(900), r.winfo_screenheight() - 120)))
         foot = tk.Frame(r, bg=BG)
         foot.pack(side="bottom", fill="x", padx=16, pady=(4, 12))
         canvas = tk.Canvas(r, bg=BG, highlightthickness=0)
-        vbar = tk.Scrollbar(r, orient="vertical", command=canvas.yview)
+        vbar = _ThinScroll(r, canvas)
         canvas.configure(yscrollcommand=vbar.set)
-        vbar.pack(side="right", fill="y")
+        vbar.pack(side="right", fill="y", padx=(0, _px(4)))
         canvas.pack(side="left", fill="both", expand=True)
         outer = tk.Frame(canvas, bg=BG)
         win = canvas.create_window((16, 14), window=outer, anchor="nw")
@@ -502,7 +693,8 @@ def open_settings(app):
             win, width=max(200, e.width - 32)))
 
         def _wheel(e):
-            canvas.yview_scroll(int(-e.delta / 120) or (-1 if e.delta > 0 else 1), "units")
+            if outer.winfo_reqheight() + 28 > canvas.winfo_height():
+                canvas.yview_scroll(int(-e.delta / 120) or (-1 if e.delta > 0 else 1), "units")
         r.bind_all("<MouseWheel>", _wheel)
 
         status = _label(foot, "Changes save as you make them.", size=9, fg=MUTED)
@@ -638,7 +830,7 @@ def open_settings(app):
         up = _section(outer, "Uploads")
         _label(up, "Visibility for new uploads", size=9, bg=PANEL).pack(
             anchor="w", padx=12)
-        vis = tk.StringVar()
+        vis = tk.StringVar(r)
         current = s.get("visibility") or ""
         vis.set(next(lbl for lbl, v in VISIBILITY if v == current))
         ttk.OptionMenu(up, vis, vis.get(),
@@ -647,7 +839,7 @@ def open_settings(app):
 
         _label(up, "Training-room battles", size=9, bg=PANEL).pack(
             anchor="w", padx=12)
-        tvis = tk.StringVar()
+        tvis = tk.StringVar(r)
         _tcur = s.get("training_visibility")
         _tcur = "" if _tcur is None else _tcur
         tvis.set(next((lbl for lbl, v in TRAINING_VISIBILITY if v == _tcur),
@@ -660,7 +852,7 @@ def open_settings(app):
                size=8, fg=MUTED, bg=PANEL, wraplength=560).pack(
             anchor="w", padx=12, pady=(0, 8))
 
-        review = tk.BooleanVar(value=bool(s.get("review_mode")))
+        review = tk.BooleanVar(r, value=bool(s.get("review_mode")))
         tk.Checkbutton(up, text="Ask me before every upload (review mode)",
                        variable=review, command=lambda: save_now(), bg=PANEL, fg=INK, selectcolor=BG,
                        activebackground=PANEL, activeforeground=INK,
@@ -701,7 +893,7 @@ def open_settings(app):
 
         # ---- startup ----
         st = _section(outer, "Startup")
-        auto = tk.BooleanVar(value=autostart.is_enabled())
+        auto = tk.BooleanVar(r, value=autostart.is_enabled())
         auto_msg = _label(st, "", size=8, fg=MUTED, bg=PANEL, wraplength=560)
 
         def toggle_auto():

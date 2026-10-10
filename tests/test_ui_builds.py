@@ -235,17 +235,22 @@ class TestWindowsBuild(unittest.TestCase):
         def root(title, w, h):
             r = real_root(title, w, h)
 
+            def walk(w_):
+                # by type, not position: on Windows our own title bar is
+                # the window's first child (winframe), elsewhere it is not
+                for c_ in w_.winfo_children():
+                    yield c_
+                    yield from walk(c_)
+
             def press():
-                btns = [w_ for w_ in r.winfo_children()[0].winfo_children()[1].winfo_children()
-                        if isinstance(w_, tk.Button)]
+                btns = [w_ for w_ in walk(r) if isinstance(w_, tk.Button)]
                 seen["labels"] = [b_.cget("text") for b_ in btns]
                 next(b_ for b_ in btns if provider.title() in b_.cget("text")).invoke()
 
             def check():
                 if not r.winfo_exists():
                     return
-                labels = [w_ for w_ in r.winfo_children()[0].winfo_children()
-                          if isinstance(w_, tk.Label)]
+                labels = [w_ for w_ in walk(r) if isinstance(w_, tk.Label)]
                 seen["msg"] = " ".join(l.cget("text") for l in labels)
                 seen["open"] = True
                 r.destroy()
@@ -314,6 +319,193 @@ class TestWindowsBuild(unittest.TestCase):
         fresh = config.Settings.load()     # re-read from disk
         self.assertEqual(fresh.get("visibility"), "private")
         self.assertTrue(fresh.get("review_mode"))
+
+    @unittest.skipUnless(os.name == "nt", "our own title bar is Windows-only")
+    def test_title_bar_close_saves_like_the_native_x(self):
+        """winframe draws the title bar, so its X must run the same
+        WM_DELETE_WINDOW handler the native one did (save, then close)."""
+        import tkinter as tk
+        from debrief_uploader import config, winframe
+        real_root = self._real_root
+        seen = {}
+
+        def walk(w):
+            yield w
+            for c in w.winfo_children():
+                yield from walk(c)
+
+        def root(title, w, h):
+            r = real_root(title, w, h)
+
+            def act():
+                seen["glyphs"] = [x.cget("text") for x in walk(r)
+                                  if isinstance(x, tk.Label)]
+                cb = next(x for x in walk(r) if isinstance(x, tk.Checkbutton)
+                          and "review mode" in x.cget("text"))
+                cb.invoke()
+                x_ = next(x for x in walk(r) if isinstance(x, tk.Label)
+                          and x.cget("text") == winframe.CLOSE)
+                x_.event_generate("<Button-1>")
+            r.after(300, act)
+            r.after(4000, lambda: r.winfo_exists() and r.destroy())
+            return r
+
+        self.ui._root = root
+        self.ui.open_settings(self.app)
+        self.assertEqual(self.errors, [])
+        for g in (winframe.MINIMIZE, winframe.MAXIMIZE, winframe.CLOSE):
+            self.assertIn(g, seen["glyphs"])
+        self.assertTrue(config.Settings.load().get("review_mode"))
+
+    @unittest.skipUnless(os.name == "nt", "our own title bar is Windows-only")
+    def test_every_corner_resizes_and_maximized_x_reaches_the_corner(self):
+        """All four corners carry a resize grip (top right was missing,
+        Stargatecraft, PR #6). Maximized, the grips step aside so the
+        corner pixel belongs to the X."""
+        import tkinter as tk
+        from debrief_uploader import winframe
+        real_root = self._real_root
+        seen = {}
+
+        def root(title, w, h):
+            r = real_root(title, w, h)
+
+            def at(dx, dy):
+                r.update()
+                x = r.winfo_rootx() + (r.winfo_width() - 1 if dx else 0)
+                y = r.winfo_rooty() + (r.winfo_height() - 1 if dy else 0)
+                return r.winfo_containing(x, y)
+
+            def probe():
+                seen["codes"] = [getattr(at(dx, dy), "_code", None)
+                                 for dx, dy in ((0, 0), (1, 0), (0, 1), (1, 1))]
+                r.state("zoomed")
+                r.update()
+                top_right = at(1, 0)
+                seen["zoomed_top_right"] = (isinstance(top_right, tk.Label)
+                                            and top_right.cget("text"))
+                r.destroy()
+            r.after(500, probe)
+            return r
+
+        self.ui._root = root
+        self.ui.open_settings(self.app)
+        self.assertEqual(self.errors, [])
+        self.assertEqual(seen["codes"], [4, 5, 7, 8])
+        self.assertEqual(seen["zoomed_top_right"], winframe.CLOSE)
+
+    @unittest.skipUnless(os.name == "nt", "work area + window rect are Win32")
+    def test_window_fits_above_the_taskbar_at_the_size_asked(self):
+        """The outer window is the size _set_size() asked for and sits inside
+        the work area. With the native title bar removed AFTER placing, it
+        came out a caption taller and the footer went under the taskbar."""
+        import ctypes
+        from ctypes import wintypes
+        real_root = self._real_root
+        seen = {}
+
+        def root(title, w, h):
+            r = real_root(title, w, h)
+
+            def measure():
+                u = ctypes.windll.user32
+                u.GetParent.restype = wintypes.HWND
+                rc = wintypes.RECT()
+                u.GetWindowRect(u.GetParent(r.winfo_id()), ctypes.byref(rc))
+                seen["rect"] = (rc.left, rc.top, rc.right, rc.bottom)
+                seen["want"] = r._wh
+                seen["work"] = self.ui._work_area(r)
+                r.destroy()
+            r.after(500, measure)
+            return r
+
+        self.ui._root = root
+        self.ui.open_settings(self.app)
+        self.assertEqual(self.errors, [])
+        l, t, rt, b = seen["rect"]
+        wl, wt, wr, wb = seen["work"]
+        self.assertGreaterEqual(t, wt)
+        self.assertLessEqual(b, wb)
+        self.assertLessEqual(abs((b - t) - min(seen["want"][1], wb - wt)), 2, seen)
+
+    def test_wrapped_text_follows_a_narrower_panel(self):
+        """Resized narrower, a fixed wrap left text wider than its panel and
+        Tk centred it, cutting both edges (Stargatecraft, PR #6)."""
+        import tkinter as tk
+        r = tk.Tk()
+        try:
+            box = tk.Frame(r, width=300, height=100)
+            box.pack(fill="both", expand=True)
+            lbl = self.ui._label(box, "word " * 60, wraplength=560)
+            lbl.pack(anchor="w")
+            r.geometry("300x200")
+            r.update()
+            self.assertLess(int(str(lbl.cget("wraplength"))), self.ui._px(300))
+        finally:
+            r.destroy()
+
+    def test_thin_scrollbar_shows_only_when_there_is_more(self):
+        """The settings body overflowed at 150% and a tester never found the
+        sections below; the slim bar is the cue. It must appear when the
+        content overflows, vanish when it fits, and move the view."""
+        import tkinter as tk
+        r = tk.Tk()
+        try:
+            t = tk.Text(r, height=5)
+            sb = self.ui._ThinScroll(r, t)
+            t.configure(yscrollcommand=sb.set)
+            sb.pack(side="right", fill="y")
+            t.pack(fill="both", expand=True)
+            t.insert("1.0", "line\n" * 3)
+            r.update()
+            self.assertEqual(sb.c.find_all(), ())          # fits: no bar
+            t.insert("end", "line\n" * 200)
+            r.update()
+            self.assertNotEqual(sb.c.find_all(), ())       # overflows: bar
+            sb._sleep()                                    # mouse went still
+            self.assertEqual(sb.c.find_all(), ())
+            sb._wake()                                     # mouse moved
+            self.assertNotEqual(sb.c.find_all(), ())
+            h = sb.c.winfo_height()
+            sb._press(type("E", (), {"y": h - 2})())       # click near the end
+            sb._release(None)
+            r.update()
+            self.assertGreater(t.yview()[0], 0.5)
+        finally:
+            r.destroy()
+
+    @unittest.skipUnless(os.name == "nt", "our own title bar is Windows-only")
+    def test_hovered_close_is_one_red_square(self):
+        """The top-right resize grips sit over the X's outer edge; hovered,
+        they must turn the X's red too, or the corner shows a dark notch
+        (Stargatecraft, PR #6, 150% scaling)."""
+        import tkinter as tk
+        from debrief_uploader import winframe
+        real_root = self._real_root
+        seen = {}
+
+        def root(title, w, h):
+            r = real_root(title, w, h)
+
+            def act():
+                x = [w_ for w_ in r.winfo_children()[0].winfo_children()
+                     if isinstance(w_, tk.Label) and w_.cget("text") == winframe.CLOSE][0]
+                x.event_generate("<Enter>")
+                r.update()
+                seen["x"] = x.cget("bg")
+                seen["grips"] = [g.cget("bg") for g in r._grips[-2:]]
+                x.event_generate("<Leave>")
+                r.update()
+                seen["after"] = [g.cget("bg") for g in r._grips[-2:]]
+                r.destroy()
+            r.after(400, act)
+            return r
+
+        self.ui._root = root
+        self.ui.open_settings(self.app)
+        self.assertEqual(self.errors, [])
+        self.assertEqual(seen["grips"], [seen["x"]] * 2)
+        self.assertNotEqual(seen["after"][0], seen["x"])
 
     def test_review_window_title_matches_its_contents(self):
         """It used to say "needs you" over a window saying nothing needs you."""
