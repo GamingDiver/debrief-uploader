@@ -301,6 +301,15 @@ the wrong battle.
 `python -m debrief_uploader review` clears the queue, or use **Review** in the
 tray menu.
 
+The **Review** window shows each held battle with the screenshots matched to
+it and why (when each was taken, against the battle's end). Click a picture
+to see it full size. **Change screenshots...** lists the captures in your
+screenshot folders around that battle's time, newest first, with the matched
+ones ticked, so you can pick the right ones yourself; **Upload without
+screenshots** sends the battle with none, for when you forgot to take them.
+The window keeps itself up to date while open, and opening it again brings
+the same window forward.
+
 ## Notes
 
 - **Nothing is deleted.** Your screenshots are only ever read. Staged replays

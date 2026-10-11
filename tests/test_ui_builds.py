@@ -45,6 +45,28 @@ class FakeEngine:
     def unblock(self):
         pass
 
+    # review actions, recorded
+    CHOSEN_NOTE = "screenshots chosen by you"
+    CHOSEN_NONE_NOTE = "no screenshots - your choice"
+
+    def __init__(self):
+        self.did = []
+
+    def confirm(self, md5):
+        self.did.append(("confirm", md5))
+
+    def skip(self, md5):
+        self.did.append(("skip", md5))
+
+    def reassign(self, md5, to_md5):
+        self.did.append(("reassign", md5, to_md5))
+
+    def set_shots(self, md5, paths):
+        self.did.append(("set_shots", md5, list(paths)))
+
+    def upload_without_shots(self, md5):
+        self.did.append(("without", md5))
+
 
 class FakeSession:
     signed_in = True
@@ -84,6 +106,7 @@ class FakeStore:
             _row(md5="b", state="awaiting_shots", short_code=None),
         ]
         self.held = held or []
+        self.shots = {}             # md5 -> [shot rows]
 
     def recent(self, n=20):
         return self.rows
@@ -96,7 +119,17 @@ class FakeStore:
         return self.rows
 
     def shots_for(self, md5):
-        return []
+        return self.shots.get(md5, [])
+
+    def shot(self, path):
+        for md5, rows in self.shots.items():
+            for r in rows:
+                if r["path"] == path:
+                    return r
+        return None
+
+    def replay(self, md5):
+        return next((r for r in self.held + self.rows if r["md5"] == md5), None)
 
 
 class FakeLog:
@@ -746,6 +779,268 @@ class TestWindowsBuild(unittest.TestCase):
         tints, x_bg, n = seen["hover"]
         self.assertEqual(tints, {x_bg})
         self.assertEqual(n, 4)       # top strip, right side, the corner's L
+
+    # ---- Review: previews that scale, live updates, chosen screenshots --
+    # (Greg, PR #6: "the images dont scale", "The Review window does not
+    # update", "i dont trust the auto matching")
+
+    def _shots_held(self, n_shots=2, extra_files=0):
+        """One held battle with n_shots matched screenshots, real 16:9 image
+        files on disk, plus extra_files more in the screenshots folder."""
+        import time as _t
+        from PIL import Image
+        d = tempfile.mkdtemp()
+        now = _t.time()
+        t_close = now - 600
+        row = _row(md5="h1", state="held", note="review mode is on",
+                   t_close=t_close)
+
+        def shot(name, t):
+            p = os.path.join(d, name)
+            Image.new("RGB", (1920, 1080), (40, 80, 120)).save(p)
+            os.utime(p, (t, t))
+            return Row(dict(path=p, t=t, replay_md5="h1", uploaded=0,
+                            ignored=0))
+        mine = [shot("auto_%d.png" % i, t_close + 40 + 7 * i)
+                for i in range(n_shots)]
+        extra = [shot("extra_%d.png" % i, t_close + 300 + 10 * i)
+                 for i in range(extra_files)]
+        self.app.store = FakeStore(held=[row])
+        self.app.store.shots = {"h1": mine}
+        self.app.s.update({"shot_dirs": [d], "shot_min_kb": 0,
+                           "watching_since": None})
+        return row, mine, [x["path"] for x in extra]
+
+    def _thumbs(self, r):
+        return [w._thumbs for w in self._walk(r) if hasattr(w, "_thumbs")]
+
+    def test_review_previews_scale_with_the_window(self):
+        self._shots_held(2)
+        px = self.ui._px
+        seen = {}
+
+        def measure(key):
+            def fn(r):
+                th = self._thumbs(r)
+                self.assertEqual(len(th), 1)
+                seen[key] = [(c["photo"].width(), c["photo"].height())
+                             for c in th[0].cells]
+            return fn
+
+        self._drive(lambda: self.ui.open_review(self.app), [
+            (lambda r: r.geometry("%dx%d" % (px(420), px(600))), 500),
+            (measure("narrow"), 0),
+            (lambda r: r.geometry("%dx%d" % (px(1300), px(600))), 500),
+            (measure("wide"), 0),
+            (lambda r: r.geometry("%dx%d" % (px(3000), px(600))), 500),
+            (measure("huge"), 0),
+        ])
+        for key in ("narrow", "wide", "huge"):
+            for w, h in seen[key]:
+                self.assertAlmostEqual(h / float(w), 1080 / 1920.0, places=1)
+                self.assertGreaterEqual(w, px(150))
+                self.assertLessEqual(w, px(640))
+        self.assertGreater(seen["wide"][0][0], seen["narrow"][0][0] * 1.5)
+        self.assertEqual(seen["huge"][0][0], px(640))        # capped
+        self.assertGreater(seen["wide"][0][0], 150)   # was a fixed 150x84
+
+    def test_clicking_a_preview_opens_it_large_and_escape_closes(self):
+        self._shots_held(1)
+        seen = {}
+
+        def click(r):
+            th = self._thumbs(r)[0]
+            seen["thumb"] = th.cells[0]["photo"].width()
+            th.cells[0]["img"].event_generate("<Button-1>")
+
+        def look(r):
+            views = [w for w in r.winfo_children() if isinstance(w, tk.Toplevel)]
+            self.assertEqual(len(views), 1)
+            v = views[0]
+            seen["size"] = v._state["size"]
+            v.event_generate("<Escape>")
+
+        def gone(r):
+            seen["left"] = [w for w in r.winfo_children()
+                            if isinstance(w, tk.Toplevel)]
+
+        self._drive(lambda: self.ui.open_review(self.app), [
+            (lambda r: None, 300), (click, 700), (look, 200), (gone, 0)])
+        self.assertGreater(seen["size"][0], seen["thumb"])
+        self.assertAlmostEqual(seen["size"][1] / float(seen["size"][0]),
+                               1080 / 1920.0, places=1)
+        self.assertEqual(seen["left"], [])
+
+    def _texts(self, r):
+        return " ".join(w.cget("text") for w in self._walk(r)
+                        if isinstance(w, (tk.Label, tk.Button)))
+
+    def _cards(self, r):
+        return [w for w in self._walk(r) if isinstance(w, tk.Frame)
+                and int(str(w.cget("highlightthickness")) or 0)
+                and w.winfo_ismapped()]
+
+    def test_review_updates_itself_and_its_title(self):
+        """Battles held after it opened appear, resolved ones go, and the
+        title always counts what is shown."""
+        store = FakeStore(held=[_row(md5="h1", state="held", note="a")])
+        self.app.store = store
+        seen = {}
+
+        def look(key):
+            def fn(r):
+                seen[key] = (r.title(), len(self._cards(r)), self._texts(r))
+            return fn
+
+        self._drive(lambda: self.ui.open_review(self.app), [
+            (look("one"), 0),
+            (lambda r: store.held.append(
+                _row(md5="h2", state="held", note="b")), 1400),
+            (look("two"), 0),
+            (lambda r: store.held.clear(), 1400),
+            (look("none"), 0),
+        ])
+        self.assertIn("1 to review", seen["one"][0])
+        self.assertEqual(seen["one"][1], 1)
+        self.assertIn("2 to review", seen["two"][0])
+        self.assertEqual(seen["two"][1], 2)
+        self.assertIn("nothing to review", seen["none"][0])
+        self.assertEqual(seen["none"][1], 0)
+        self.assertIn("Nothing to review.", seen["none"][2])
+
+    def test_upload_redraws_instead_of_leaving_an_empty_window(self):
+        """Greg's screenshot: "1 to review" over an empty window, after the
+        one panel was resolved and only deleted."""
+        store = FakeStore(held=[_row(md5="h1", state="held", note="a")])
+        self.app.store = store
+
+        class Resolves(FakeEngine):
+            def confirm(self, md5):
+                store.held[:] = [x for x in store.held if x["md5"] != md5]
+        self.app.eng = Resolves()
+        seen = {}
+
+        def press(r):
+            next(w for w in self._walk(r) if isinstance(w, tk.Button)
+                 and w.cget("text") == "Upload").invoke()
+            # no wait: the redraw is immediate, not the next poll
+            seen["after"] = (r.title(), self._texts(r))
+
+        self._drive(lambda: self.ui.open_review(self.app), [(press, 0)])
+        self.assertIn("nothing to review", seen["after"][0])
+        self.assertIn("Nothing to review.", seen["after"][1])
+
+    def test_empty_review_says_so(self):
+        self.app.store = FakeStore(held=[])
+        seen = {}
+        self._drive(lambda: self.ui.open_review(self.app), [
+            (lambda r: seen.update(t=self._texts(r), title=r.title()), 0)])
+        self.assertIn("Nothing to review.", seen["t"])
+        self.assertIn("nothing to review", seen["title"])
+
+    def test_opening_review_again_brings_the_open_one_forward(self):
+        self.app.store = FakeStore(held=[_row(md5="h1", state="held")])
+        roots = []
+        seen = {}
+        real_root = self._real_root
+
+        def counting(title, w, h):
+            roots.append(title)
+            return real_root(title, w, h)
+        self._real_root = counting
+
+        def again(r):
+            # what a second tray click does; with the sync _thread a
+            # second window would be built right here, inside this one
+            self.ui.open_review(self.app)
+            seen["asked"] = self.ui._REVIEW["front"]
+
+        def later(r):
+            seen["served"] = not self.ui._REVIEW["front"]
+
+        try:
+            self._drive(lambda: self.ui.open_review(self.app),
+                        [(again, 600), (later, 0)])
+            self.assertEqual(len(roots), 1)
+            self.assertTrue(seen["asked"])
+            self.assertTrue(seen["served"])
+            self.assertFalse(self.ui._REVIEW["open"])
+            # closed, it opens again
+            self._drive(lambda: self.ui.open_review(self.app), [])
+            self.assertEqual(len(roots), 2)
+        finally:
+            self._real_root = real_root
+
+    def test_review_says_which_screenshots_and_why(self):
+        self._shots_held(2)
+        seen = {}
+        self._drive(lambda: self.ui.open_review(self.app), [
+            (lambda r: seen.update(t=self._texts(r)), 0)])
+        self.assertIn("MATCHED AUTOMATICALLY - 2 screenshots, the first "
+                      "taken 40 s after the battle", seen["t"])
+        self.assertIn("47 s after the battle", seen["t"])
+        self.assertIn("Change screenshots...", seen["t"])
+        self.assertIn("Upload without screenshots", seen["t"])
+
+    def test_picker_choice_replaces_the_matched_screenshots(self):
+        row, mine, extra = self._shots_held(2, extra_files=2)
+        seen = {}
+
+        def open_picker(r):
+            next(w for w in self._walk(r) if isinstance(w, tk.Button)
+                 and w.cget("text") == "Change screenshots...").invoke()
+
+        def choose(r):
+            p = r._picker
+            ticked = {path: v.get() for path, _, v, _ in p._tiles}
+            seen["listed"] = [path for path, _, _, _ in p._tiles]
+            seen["ticked"] = sorted(k for k, v in ticked.items() if v)
+            for path, _, v, _ in p._tiles:
+                # keep the first matched one, swap the second for a new one
+                v.set(path in (mine[0]["path"], extra[1]))
+            p._apply()
+            seen["closed"] = not p.winfo_exists()
+
+        self._drive(lambda: self.ui.open_review(self.app), [
+            (open_picker, 300), (choose, 0)])
+        auto = sorted(x["path"] for x in mine)
+        self.assertEqual(seen["ticked"], auto)       # matched ones pre-ticked
+        # newest first
+        self.assertEqual(seen["listed"],
+                         sorted(seen["listed"],
+                                key=lambda p: -os.path.getmtime(p)))
+        self.assertEqual(set(seen["listed"]), set(auto) | set(extra))
+        self.assertTrue(seen["closed"])
+        # oldest first, as the upload sends them
+        self.assertIn(("set_shots", "h1", [mine[0]["path"], extra[1]]),
+                      self.app.eng.did)
+
+    def test_picker_refuses_more_than_the_upload_takes(self):
+        row, mine, extra = self._shots_held(2, extra_files=4)
+        seen = {}
+
+        def go(r):
+            next(w for w in self._walk(r) if isinstance(w, tk.Button)
+                 and w.cget("text") == "Change screenshots...").invoke()
+            p = r._picker
+            for _, _, v, _ in p._tiles:
+                v.set(False)
+            boxes = [w for w in self._walk(p) if isinstance(w, tk.Checkbutton)]
+            for cb in boxes:
+                cb.invoke()                  # as a user would, one by one
+            seen["ticked"] = sum(1 for _, _, v, _ in p._tiles if v.get())
+
+        self._drive(lambda: self.ui.open_review(self.app), [(go, 0)])
+        self.assertEqual(seen["ticked"], self.app.s["max_shots"])
+
+    def test_upload_without_screenshots_is_one_click(self):
+        self._shots_held(2)
+        self._drive(lambda: self.ui.open_review(self.app), [
+            (lambda r: next(w for w in self._walk(r)
+                            if isinstance(w, tk.Button) and
+                            w.cget("text") == "Upload without screenshots"
+                            ).invoke(), 0)])
+        self.assertIn(("without", "h1"), self.app.eng.did)
 
     def test_review_window_title_matches_its_contents(self):
         """It used to say "needs you" over a window saying nothing needs you."""

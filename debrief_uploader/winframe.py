@@ -119,6 +119,7 @@ def frame(r, title, px, bg, icon, fg="#cfd8dc"):
     label = tk.Label(bar, text=title, bg=bg, fg=fg, font=("Segoe UI", 9))
     label.pack(side="left", padx=px(8))
     grab.append(label)
+    r._title_label = label          # ui._set_title keeps it in step
 
     def toggle_max(e=None):
         r.state("normal" if r.state() == "zoomed" else "zoomed")
