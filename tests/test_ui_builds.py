@@ -832,7 +832,9 @@ class TestWindowsBuild(unittest.TestCase):
             (measure("narrow"), 0),
             (lambda r: r.geometry("%dx%d" % (px(1300), px(600))), 500),
             (measure("wide"), 0),
-            (lambda r: r.geometry("%dx%d" % (px(3000), px(600))), 500),
+            # wider than any CI screen lets the window be (Windows CI
+            # clamps it to ~1024): lay out for a huge panel directly
+            (lambda r: self._thumbs(r)[0].fit(px(3000)), 0),
             (measure("huge"), 0),
         ])
         for key in ("narrow", "wide", "huge"):
