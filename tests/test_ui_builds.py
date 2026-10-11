@@ -131,6 +131,9 @@ class FakeStore:
     def replay(self, md5):
         return next((r for r in self.held + self.rows if r["md5"] == md5), None)
 
+    def free_shots(self, since=None):
+        return getattr(self, "free", [])
+
 
 class FakeLog:
     def __init__(self):
@@ -877,10 +880,13 @@ class TestWindowsBuild(unittest.TestCase):
         return " ".join(w.cget("text") for w in self._walk(r)
                         if isinstance(w, (tk.Label, tk.Button)))
 
-    def _cards(self, r):
+    def _cards(self, r, waiting=False):
+        """The held battles' cards (or, waiting=True, the cards of battles
+        still waiting for scorecards)."""
         return [w for w in self._walk(r) if isinstance(w, tk.Frame)
                 and int(str(w.cget("highlightthickness")) or 0)
-                and w.winfo_ismapped()]
+                and w.winfo_ismapped()
+                and bool(getattr(w, "_waiting", False)) == waiting]
 
     def test_review_updates_itself_and_its_title(self):
         """Battles held after it opened appear, resolved ones go, and the
@@ -1043,6 +1049,94 @@ class TestWindowsBuild(unittest.TestCase):
                             w.cget("text") == "Upload without screenshots"
                             ).invoke(), 0)])
         self.assertIn(("without", "h1"), self.app.eng.did)
+
+    # ---- Review, second round (Stargatecraft, PR #6 retest) -------------
+
+    def test_waiting_battles_show_at_once_with_their_actions(self):
+        """"It doesnt update new scoreboards on its own without
+        scoreboards": a battle with no scorecards only became a card after
+        orphan_after (15 min). It is listed, and can be settled, at once."""
+        import time as _t
+        self.app.store = FakeStore(rows=[_row(
+            md5="w1", state="awaiting_shots", t_close=_t.time() - 60)])
+        seen = {}
+
+        def look(r):
+            seen["held"] = len(self._cards(r))
+            seen["waiting"] = len(self._cards(r, waiting=True))
+            seen["t"] = self._texts(r)
+            next(w for w in self._walk(r) if isinstance(w, tk.Button)
+                 and w.cget("text") == "Upload without screenshots").invoke()
+
+        self._drive(lambda: self.ui.open_review(self.app), [(look, 0)])
+        self.assertEqual(seen["held"], 0)
+        self.assertEqual(seen["waiting"], 1)
+        self.assertIn("WAITING FOR SCORECARDS", seen["t"])
+        self.assertIn("Choose screenshots...", seen["t"])
+        self.assertIn("Nothing to review.", seen["t"])
+        self.assertIn(("without", "w1"), self.app.eng.did)
+
+    def test_screenshots_still_settling_are_explained(self):
+        """"it did appear ... but it took a minute-ish": the matcher waits
+        in case another screenshot is coming; the window says so, and when."""
+        import time as _t
+        store = FakeStore(rows=[])
+        store.free = [Row(dict(path="/x/a.png", t=_t.time() - 5))]
+        self.app.store = store
+        seen = {}
+        self._drive(lambda: self.ui.open_review(self.app), [
+            (lambda r: seen.update(t=self._texts(r)), 0)])
+        self.assertIn("1 screenshot just taken - it is matched to a battle at",
+                      seen["t"])
+
+    def test_picker_closes_when_its_battle_is_resolved_elsewhere(self):
+        """A review finished while the picker was open left it choosing for
+        a battle that was gone; Use these then failed."""
+        row, mine, extra = self._shots_held(2)
+        store = self.app.store
+        seen = {}
+
+        def open_picker(r):
+            next(w for w in self._walk(r) if isinstance(w, tk.Button)
+                 and w.cget("text") == "Change screenshots...").invoke()
+            seen["picker"] = r._picker
+            store.held.clear()          # uploaded from somewhere else
+
+        def look(r):
+            seen["open"] = seen["picker"].winfo_exists()
+
+        self._drive(lambda: self.ui.open_review(self.app), [
+            (open_picker, 1600), (look, 0)])
+        self.assertFalse(seen["open"])
+
+    def test_picker_greys_a_screenshot_sent_with_another_battle(self):
+        row, mine, extra = self._shots_held(2, extra_files=1)
+        store = self.app.store
+        seen = {}
+
+        def open_picker(r):
+            next(w for w in self._walk(r) if isinstance(w, tk.Button)
+                 and w.cget("text") == "Change screenshots...").invoke()
+            p = r._picker
+            for path, _, v, _ in p._tiles:
+                if path == extra[0]:
+                    v.set(True)
+            store.rows.append(_row(md5="o1", state="uploaded"))
+            store.shots["o1"] = [Row(dict(path=extra[0], t=0, replay_md5="o1",
+                                          uploaded=1, ignored=0))]
+            p._watch()
+            seen["ticked"] = [path for path, _, v, _ in p._tiles if v.get()]
+            boxes = {}
+            for w in self._walk(p):
+                if isinstance(w, tk.Checkbutton):
+                    boxes[str(w.cget("variable"))] = w.cget("state")
+            seen["states"] = boxes
+            seen["t"] = self._texts(p)
+
+        self._drive(lambda: self.ui.open_review(self.app), [(open_picker, 0)])
+        self.assertNotIn(extra[0], seen["ticked"])
+        self.assertIn("disabled", seen["states"].values())
+        self.assertIn("already sent with", seen["t"])
 
     def test_review_window_title_matches_its_contents(self):
         """It used to say "needs you" over a window saying nothing needs you."""

@@ -531,12 +531,26 @@ class Engine:
         """Resolve a held item: this battle really does own these screenshots."""
         self.store.update_replay(md5, state=READY, note=None)
 
+    MOVED_NOTE = "screenshots moved here by you - press Upload to send it"
+
     def reassign(self, md5, to_md5):
+        """Give one held battle's screenshots to another battle.
+
+        The battle that receives them is HELD for the user's Upload, never
+        queued: moving screenshots is a correction, not a send (Stargatecraft,
+        PR #6: "When you send Screenshots to another card they and the replay
+        get uploaded automatically and locked ... it shouldnt upload"). The
+        battle that gave them up goes back to waiting, where the review
+        window still shows it."""
         shots = [s["path"] for s in self.store.shots_for(md5)]
+        to_row = self.store.replay(to_md5)
         self.store.detach_shots(md5)
         self.store.attach_shots(shots, to_md5)
-        self.store.update_replay(md5, state=AWAITING_SHOTS, note=None)
-        self.store.update_replay(to_md5, state=READY, note=None)
+        self.store.update_replay(
+            md5, state=AWAITING_SHOTS,
+            note="you gave its screenshots to %s"
+                 % (self._label(to_row) if to_row else "another battle"))
+        self.store.update_replay(to_md5, state=HELD, note=self.MOVED_NOTE)
 
     CHOSEN_NOTE = "screenshots chosen by you"
     CHOSEN_NONE_NOTE = "no screenshots - your choice"
@@ -553,14 +567,16 @@ class Engine:
         `paths` may be empty: no screenshots. Files the matcher had attached
         and the user left out are forgotten (detached AND ignored): freed,
         the matcher could hand them to another battle and upload them
-        unasked. They stay pickable here. Only a battle still waiting for
-        review can be changed, and a screenshot already sent with another
-        battle cannot be taken from it.
+        unasked. They stay pickable here. Only a battle held for review, or
+        one still waiting for its scorecards, can be changed; the second is
+        held afterwards, so the user's pick is never sent without their
+        Upload. A screenshot already sent with another battle cannot be taken
+        from it.
 
         Raises ValueError with a message meant for the user.
         """
         row = self.store.replay(md5)
-        if row is None or row["state"] != HELD:
+        if row is None or row["state"] not in (HELD, AWAITING_SHOTS):
             raise ValueError("this battle is no longer waiting for review")
         paths = list(dict.fromkeys(paths))
         if len(paths) > self.s["max_shots"]:
@@ -596,7 +612,8 @@ class Engine:
             self.store.forget_shots(dropped)
         self.store.assign_shots(paths, md5)
         self.store.update_replay(
-            md5, note=self.CHOSEN_NOTE if paths else self.CHOSEN_NONE_NOTE)
+            md5, state=HELD,
+            note=self.CHOSEN_NOTE if paths else self.CHOSEN_NONE_NOTE)
         self.log.info("%s: %s" % (
             self._label(row),
             "using the %d screenshot(s) you chose" % len(paths) if paths

@@ -287,6 +287,28 @@ class TestEngineMatching(EngineCase):
         self.assertEqual(len(self.store.shots_for(a["md5"])), 2)
         self.assertEqual(len(self.store.shots_for(b["md5"])), 0)
 
+    def test_reassigning_holds_the_receiver_instead_of_uploading_it(self):
+        """Stargatecraft, PR #6: giving screenshots to another card uploaded
+        that battle at once. Moving them is a correction, not a send."""
+        now = time.time()
+        self.make_replay("2026_A.wowsreplay", mtime=now - 900)
+        self.battle("B", now - 600)
+        for _ in range(6):
+            self.eng.tick()
+        rows = {r["filename"]: r for r in self.store.replays()}
+        a, b = rows["2026_A.wowsreplay"], rows["2026_B.wowsreplay"]
+        self.eng.reassign(b["md5"], a["md5"])
+        for _ in range(4):
+            self.eng.tick()
+        self.assertEqual(self.store.replay(a["md5"])["state"], matcher.HELD)
+        self.assertEqual(self.store.replay(a["md5"])["note"],
+                         engine.Engine.MOVED_NOTE)
+        self.assertEqual(self.client.calls.count("shot"), 0)
+        self.assertIn("gave its screenshots", self.store.replay(b["md5"])["note"])
+        # ...and survives a restart, like any hold the user made
+        self.assertEqual(self.eng._recheck_held(), 0)
+        self.assertEqual(self.store.replay(a["md5"])["state"], matcher.HELD)
+
     def test_orphan_keeps_the_file_and_uploads_nothing_when_disabled(self):
         self.s["upload_without_scorecards"] = False
         old = time.time() - 3 * 3600
@@ -894,6 +916,21 @@ class TestUserChosenScreenshots(EngineCase):
         self.eng.confirm(self.row["md5"])
         with self.assertRaises(ValueError):
             self.eng.set_shots(self.row["md5"], [])
+
+    def test_a_waiting_battle_can_be_given_shots_and_is_then_held(self):
+        """The review window lists battles still waiting for scorecards; a
+        pick made there holds the battle for Upload, never sends it."""
+        self.store.add_replay(md5="W", filename="w.wowsreplay",
+                              state=matcher.AWAITING_SHOTS,
+                              t_close=time.time() - 60)
+        shot = self.make_shot("w1.png", mtime=time.time() - 30)
+        self.eng.set_shots("W", [shot])
+        row = self.store.replay("W")
+        self.assertEqual(row["state"], matcher.HELD)
+        self.assertEqual(row["note"], engine.Engine.CHOSEN_NOTE)
+        for _ in range(3):
+            self.eng.tick()
+        self.assertEqual(self.store.replay("W")["state"], matcher.HELD)
 
     def test_a_shot_already_uploaded_elsewhere_is_refused(self):
         self.store.add_replay(md5="other", filename="o.wowsreplay",

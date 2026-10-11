@@ -9,6 +9,7 @@ cannot open must not become a dead end.
 import os
 import sys
 import threading
+import time
 
 from . import autostart, config, oauth
 from .api import ApiError
@@ -976,6 +977,7 @@ def _pick_shots(parent, app, row, on_done):
 
     blank = tk.PhotoImage(master=w, width=_px(200), height=_px(112))
     tiles = []                     # (path, t, var, tile)
+    live = {}                      # path -> (checkbox, owner label, free)
     pics = []
 
     def owner_of(path):
@@ -1025,9 +1027,10 @@ def _pick_shots(parent, app, row, on_done):
         whose, free = owner_of(path)
         if path in attached:
             whose = "attached to this battle now"
+        whose_lbl = _label(info, whose, size=8, fg=AMBER if free else MUTED,
+                           bg=PANEL, anchor="w", wraplength=360)
         if whose:
-            _label(info, whose, size=8, fg=AMBER if free else MUTED, bg=PANEL,
-                   anchor="w", wraplength=360).pack(fill="x")
+            whose_lbl.pack(fill="x")
         var = tk.BooleanVar(w, value=path in attached)
         cb = tk.Checkbutton(info, text="Use this one", variable=var, bg=PANEL,
                             fg=INK, selectcolor=BG, activebackground=PANEL,
@@ -1039,6 +1042,7 @@ def _pick_shots(parent, app, row, on_done):
         if var.get():
             tile.configure(highlightbackground=AMBER)
         tiles.append((path, t, var, tile))
+        live[path] = (cb, whose_lbl, free)
 
     if not cands:
         _label(pad, "No screenshots in your screenshot folders (Settings). "
@@ -1096,6 +1100,38 @@ def _pick_shots(parent, app, row, on_done):
         close()
         on_done()
 
+    def watch():
+        """Keep the picker true while it is open (Stargatecraft, PR #6: a
+        review finished elsewhere left its screenshots tickable here, and
+        Use these then failed). The battle resolved -> nothing to choose
+        for, so it closes. A screenshot sent with another battle meanwhile
+        -> unticked and greyed, as if it had been when the picker opened."""
+        if not w.winfo_exists():
+            return
+        try:
+            now_row = app.store.replay(md5)
+            if now_row is None or now_row["state"] not in (
+                    matcher.HELD, matcher.AWAITING_SHOTS):
+                close()
+                return
+            for path, _, var, tile in tiles:
+                cb, lbl, was_free = live[path]
+                whose, free = owner_of(path)
+                if free or not was_free:
+                    continue
+                live[path] = (cb, lbl, False)
+                var.set(False)
+                cb.configure(state="disabled")
+                tile.configure(highlightbackground=LINE)
+                lbl.configure(text=whose, fg=MUTED)
+                if not lbl.winfo_manager():
+                    lbl.pack(fill="x")
+                n = count()
+                use.configure(text="Use these %d" % n if n else "Use none")
+        except Exception as e:     # a failed read must not kill the picker
+            app.log.error("screenshot picker refresh failed (%s)" % e)
+        w.after(1000, watch)
+
     w.protocol("WM_DELETE_WINDOW", close)
     w.bind("<Escape>", lambda e: close())
     msg.pack(side="left")
@@ -1104,7 +1140,8 @@ def _pick_shots(parent, app, row, on_done):
     use = _button(foot, "Use these %d" % n0 if n0 else "Use none", apply,
                   primary=True)
     use.pack(side="right")
-    w._tiles, w._apply = tiles, apply          # tests drive it by these
+    w.after(1000, watch)
+    w._tiles, w._apply, w._watch = tiles, apply, watch   # tests drive these
     return w
 
 
@@ -1167,17 +1204,39 @@ def _review_window(app, refresh_ms=1000):
     from . import matcher
     from .engine import Engine
 
+    def settling():
+        """(count, decided-at) of screenshots taken but not matched yet: the
+        30-90 s the matcher waits in case another one is coming. Shown, so a
+        battle with fresh screenshots is not a mystery for that minute
+        (Stargatecraft, PR #6: "it did appear ... but it took a minute-ish")."""
+        rows = list(app.store.free_shots())
+        if not rows:
+            return 0, None
+        _, open_ = matcher.cluster_shots(
+            [matcher.ShotRec(x["path"], x["t"]) for x in rows],
+            app.s["pair_gap"], app.s["pair_settle"], time.time(),
+            app.s["pair_settle_full"])
+        if not open_:
+            return 0, None
+        return (sum(len(g) for g in open_),
+                max(matcher.decides_at(g, app.s["pair_settle"],
+                                       app.s["pair_settle_full"])
+                    for g in open_))
+
     def snapshot():
         held = list(app.store.replays([matcher.HELD]))
         waiting = list(app.store.replays([matcher.AWAITING_SHOTS]))
         shots = {x["md5"]: list(app.store.shots_for(x["md5"])) for x in held}
+        settle = settling()
         sig = repr(([(x["md5"], x["note"], [s["path"] for s in shots[x["md5"]]])
                      for x in held],
-                    [(x["md5"], app.eng._label(x)) for x in waiting]))
-        return held, waiting, shots, sig
+                    [(x["md5"], app.eng._label(x), x["note"]) for x in waiting],
+                    settle))
+        return held, waiting, shots, settle, sig
 
     first = snapshot()
-    r = _root(_review_title(first[0]), 680, 620 if first[0] else 300)
+    r = _root(_review_title(first[0]), 680,
+              620 if first[0] or first[1] else 300)
     # six held battles are taller than the window: they scroll, rather
     # than pack squashing the last one's buttons (Stargatecraft, PR #6)
     body = _Body(r, padx=16, pady=16)
@@ -1225,10 +1284,13 @@ def _review_window(app, refresh_ms=1000):
         # dont trust the auto matching")
         sec = tk.Frame(box, bg=PANEL)
         sec.pack(fill="x", padx=10, pady=(8, 0))
-        chosen = row["note"] in (Engine.CHOSEN_NOTE, Engine.CHOSEN_NONE_NOTE)
+        moved = row["note"] == Engine.MOVED_NOTE
+        chosen = moved or row["note"] in (Engine.CHOSEN_NOTE,
+                                          Engine.CHOSEN_NONE_NOTE)
         if shots:
             first_t = min(s["t"] or 0 for s in shots)
-            why = ("YOU CHOSE THESE %d SCREENSHOTS" % len(shots) if chosen
+            why = ("YOU MOVED THESE %d SCREENSHOTS HERE" % len(shots) if moved
+                   else "YOU CHOSE THESE %d SCREENSHOTS" % len(shots) if chosen
                    else "MATCHED AUTOMATICALLY - %d screenshot%s, the first "
                         "taken %s" % (len(shots), "" if len(shots) == 1 else "s",
                                       _vs_battle(first_t, t_close)
@@ -1276,28 +1338,73 @@ def _review_window(app, refresh_ms=1000):
                 side="left", padx=(6, 0))
         _button(btns, "Skip", act(app.eng.skip, md5)).pack(side="left", padx=6)
 
-    def render(held, waiting, shots):
+    def waiting_card(pg, row):
+        """A battle the matcher is still waiting on. It used to be only a
+        count until it was held, and with no scorecards that is 15 minutes
+        (orphan_after) - long enough to look like the window had stopped
+        updating (Stargatecraft, PR #6). It can be settled from here."""
+        md5 = row["md5"]
+        t_close = row["t_close"] or 0
+        box = tk.Frame(pg, bg=PANEL, highlightbackground=LINE,
+                       highlightthickness=1)
+        box._waiting = True
+        box.pack(fill="x", pady=6)
+        _label(box, app.eng._label(row), size=11, bold=True,
+               bg=PANEL, anchor="w", wraplength=580).pack(
+            fill="x", padx=10, pady=(8, 0))
+        if row["note"]:
+            _label(box, row["note"], size=9, fg=MUTED, bg=PANEL, anchor="w",
+                   wraplength=580).pack(fill="x", padx=10)
+        if t_close:
+            _label(box, "Replay saved at %s" % _clock(t_close), size=8,
+                   fg=MUTED, bg=PANEL, anchor="w", wraplength=580).pack(
+                fill="x", padx=10)
+        if row["backfill"] or app.s.get("review_mode"):
+            then = "it comes here for you to decide"
+        elif app.s.get("upload_without_scorecards"):
+            then = "it uploads without them"
+        else:
+            then = "it is kept and not uploaded"
+        when = (_clock(t_close + app.s["orphan_after"]) if t_close
+                else "a while")
+        _label(box, "WAITING FOR SCORECARDS - if none are taken by %s, or "
+                    "you play %d more battles first, %s"
+               % (when, app.s["orphan_after_n_later"], then),
+               size=8, bold=True, fg=AMBER, bg=PANEL, anchor="w",
+               wraplength=580).pack(fill="x", padx=10, pady=(8, 0))
+        btns = tk.Frame(box, bg=PANEL)
+        btns.pack(fill="x", padx=10, pady=(10, 10))
+        _button(btns, "Choose screenshots...",
+                lambda: _pick_shots(r, app, row,
+                                    lambda: (refresh(force=True), changed()))
+                ).pack(side="left")
+        _button(btns, "Upload without screenshots",
+                act(app.eng.upload_without_shots, md5)).pack(
+            side="left", padx=(6, 0))
+        _button(btns, "Skip", act(app.eng.skip, md5)).pack(side="left", padx=6)
+
+    def render(held, waiting, shots, settle=(0, None)):
         top = body.canvas.yview()[0]
         was_empty = page[0] is not None and not getattr(page[0], "_held", 0)
         if page[0] is not None:
             page[0].destroy()
         pg = page[0] = tk.Frame(body.inner, bg=BG)
-        pg._held = len(held)
+        pg._held = len(held) + len(waiting)
         pg.pack(fill="x")
         _set_title(r, _review_title(held))
-        body.center = not held
-        if not held:
+        body.center = not held and not waiting
+        n_settle, settle_at = settle
+        settle_text = ("%d screenshot%s just taken - %s matched to a battle "
+                       "at %s, in case you take another."
+                       % (n_settle, "" if n_settle == 1 else "s",
+                          "it is" if n_settle == 1 else "they are",
+                          _clock(settle_at))) if n_settle else ""
+        if not held and not waiting:
             _label(pg, "Nothing to review.", size=13, bold=True,
                    wraplength=520, justify="center").pack()
-            if waiting:
-                text = ("%d battle%s waiting for scorecards - capture the "
-                        "Personal and Team Result tabs and they will go up "
-                        "on their own."
-                        % (len(waiting), " is" if len(waiting) == 1 else "s are"))
-            else:
-                text = "Everything it has seen has been dealt with."
-            _label(pg, text + " Leave this open: anything that needs you "
-                              "appears here.",
+            _label(pg, (settle_text or "Everything it has seen has been "
+                                       "dealt with.") +
+                   " Leave this open: anything that needs you appears here.",
                    size=9, fg=MUTED, wraplength=520,
                    justify="center").pack(pady=(8, 0))
             _button(pg, "Close", r.destroy).pack(pady=16)
@@ -1306,8 +1413,19 @@ def _review_window(app, refresh_ms=1000):
                 # it opened with nothing to show; make room for a panel
                 r.geometry("%dx%d" % (r.winfo_width(),
                                       min(_px(620), r.winfo_screenheight() - 80)))
+            if not held:
+                _label(pg, "Nothing to review.", size=12, bold=True,
+                       anchor="w").pack(fill="x")
             for row in held:
                 card(pg, row, shots[row["md5"]], waiting)
+            if waiting or settle_text:
+                _label(pg, "STILL WAITING", size=8, bold=True, fg=MUTED,
+                       anchor="w").pack(fill="x", pady=(12 if held else 8, 0))
+                if settle_text:
+                    _label(pg, settle_text, size=9, fg=MUTED, anchor="w",
+                           wraplength=600).pack(fill="x", pady=(2, 0))
+                for row in waiting:
+                    waiting_card(pg, row)
         for p in list(cache):
             if not any(p == s["path"] for v in shots.values() for s in v):
                 del cache[p]
@@ -1319,10 +1437,10 @@ def _review_window(app, refresh_ms=1000):
         # old panels go with this thread's collection when the window closes.
 
     def refresh(force=False, snap=None):
-        held, waiting, shots, sig = snap or snapshot()
+        held, waiting, shots, settle, sig = snap or snapshot()
         if force or sig != last[0]:
             last[0] = sig
-            render(held, waiting, shots)
+            render(held, waiting, shots, settle)
 
     def front():
         try:
