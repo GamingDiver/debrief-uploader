@@ -792,6 +792,121 @@ class TestHoldsAreRecheckedOnStart(EngineCase):
         self.assertTrue(any("no longer ambiguous" in l for l in self.log.lines))
 
 
+    def test_review_mode_hold_is_not_released_on_start(self):
+        """'Ask me before every upload' must survive a restart: the recheck
+        used to release every non-backfill hold with two screenshots."""
+        self._replay("B", close_ago=1, started_ago=14, state=matcher.HELD,
+                     note="review mode is on")
+        self._shots_on("B", ago_min=0)
+        self._boot()
+        self.assertEqual(self.store.replay("B")["state"], matcher.HELD)
+
+    def test_hand_picked_hold_is_not_released_on_start(self):
+        self._replay("B", close_ago=1, started_ago=14, state=matcher.HELD,
+                     note=engine.Engine.CHOSEN_NOTE)
+        self._shots_on("B", ago_min=0)
+        self._boot()
+        self.assertEqual(self.store.replay("B")["state"], matcher.HELD)
+
+
+class TestUserChosenScreenshots(EngineCase):
+    """The review window's override (Greg, PR #6: "i dont trust the auto
+    matching as sometimes i forget to screenshot"). Whatever the user picks
+    is exactly what uploads; "without screenshots" uploads none; the upload
+    itself (order, names, calls) is unchanged."""
+
+    def setUp(self):
+        super().setUp()
+        self.s["review_mode"] = True
+        now = time.time()
+        self.battle("A", now - 300)            # its two shots auto-match
+        for _ in range(6):
+            self.eng.tick()
+        self.row = self.store.replays()[0]
+        self.assertEqual(self.row["state"], matcher.HELD)
+        self.auto = [s["path"] for s in self.store.shots_for(self.row["md5"])]
+        self.assertEqual(len(self.auto), 2)
+
+    def _upload(self):
+        self.eng.confirm(self.row["md5"])
+        for _ in range(3):
+            self.eng.tick()
+        self.assertEqual(self.store.replay(self.row["md5"])["state"],
+                         matcher.UPLOADED)
+
+    def _sent(self):
+        """Which local files went up, in upload order (shot1, shot2...)."""
+        return [s["path"] for s in self.store.shots_for(self.row["md5"])
+                if s["uploaded"]]
+
+    def test_chosen_files_replace_the_matched_ones(self):
+        now = time.time()
+        mine = [self.make_shot("mine_1.png", mtime=now - 200),
+                self.make_shot("mine_2.png", mtime=now - 190)]
+        # one of the matched files kept, one swapped for a file it never saw
+        self.eng.set_shots(self.row["md5"], [mine[1], self.auto[0], mine[0]])
+        self.assertEqual(self.store.replay(self.row["md5"])["note"],
+                         engine.Engine.CHOSEN_NOTE)
+        self._upload()
+        self.assertEqual(self.client.calls.count("shot"), 3)
+        self.assertEqual(sorted(self.client.rows["rid-1"]["shots"]),
+                         ["rid-1/shot1.jpg", "rid-1/shot2.jpg", "rid-1/shot3.jpg"])
+        # oldest first, as before: shot1 is the earliest capture
+        self.assertEqual(self._sent(), [self.auto[0], mine[0], mine[1]])
+        # the one left out is never matched to anything again
+        left = self.store.shot(self.auto[1])
+        self.assertIsNone(left["replay_md5"])
+        self.assertEqual(left["ignored"], 1)
+
+    def test_without_screenshots_sends_none(self):
+        self.eng.upload_without_shots(self.row["md5"])
+        self.assertEqual(self.store.replay(self.row["md5"])["state"],
+                         matcher.READY)
+        for _ in range(3):
+            self.eng.tick()
+        self.assertEqual(self.store.replay(self.row["md5"])["state"],
+                         matcher.UPLOADED)
+        self.assertEqual(self.client.calls.count("raw"), 1)
+        self.assertEqual(self.client.calls.count("shot"), 0)
+        # and the matcher does not hand them to the next battle either
+        for p in self.auto:
+            self.assertEqual(self.store.shot(p)["ignored"], 1)
+        self.eng.match(time.time() + 3600)
+        for p in self.auto:
+            self.assertIsNone(self.store.shot(p)["replay_md5"])
+
+    def test_a_forgotten_shot_can_be_picked_back(self):
+        self.eng.set_shots(self.row["md5"], [])
+        self.eng.set_shots(self.row["md5"], self.auto)
+        self._upload()
+        self.assertEqual(self.client.calls.count("shot"), 2)
+
+    def test_too_many_is_refused(self):
+        now = time.time()
+        many = [self.make_shot("m%d.png" % i, mtime=now - 100 + i)
+                for i in range(self.s["max_shots"] + 1)]
+        with self.assertRaises(ValueError):
+            self.eng.set_shots(self.row["md5"], many)
+        self.assertEqual(
+            [s["path"] for s in self.store.shots_for(self.row["md5"])], self.auto)
+
+    def test_only_a_held_battle_can_change(self):
+        self.eng.confirm(self.row["md5"])
+        with self.assertRaises(ValueError):
+            self.eng.set_shots(self.row["md5"], [])
+
+    def test_a_shot_already_uploaded_elsewhere_is_refused(self):
+        self.store.add_replay(md5="other", filename="o.wowsreplay",
+                              state=matcher.UPLOADED, t_close=time.time())
+        p = self.make_shot("theirs.png", mtime=time.time() - 50)
+        self.store.add_shot(p, time.time() - 50)
+        self.store.attach_shots([p], "other")
+        self.store.mark_shots_uploaded("other")
+        with self.assertRaises(ValueError):
+            self.eng.set_shots(self.row["md5"], [p])
+        self.assertEqual(self.store.shot(p)["replay_md5"], "other")
+
+
 class TestOverwritingExistingScreenshots(EngineCase):
     """Attaching screenshots to a replay that is already on the site.
 

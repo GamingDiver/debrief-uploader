@@ -55,7 +55,12 @@ class Engine:
         """
         released = 0
         for row in self.store.replays([HELD]):
-            if row["backfill"]:
+            # Only the ambiguity hold. A review-mode hold ("ask me before
+            # every upload") or one whose screenshots the user picked by hand
+            # has two screenshots and no rival too, and releasing it would
+            # upload it on the next start without the user pressing Upload.
+            if row["backfill"] or not (row["note"] or "").startswith(
+                    matcher.AMBIGUOUS_REASON):
                 continue
             shots = self.store.shots_for(row["md5"])
             if len(shots) < 2:
@@ -532,6 +537,76 @@ class Engine:
         self.store.attach_shots(shots, to_md5)
         self.store.update_replay(md5, state=AWAITING_SHOTS, note=None)
         self.store.update_replay(to_md5, state=READY, note=None)
+
+    CHOSEN_NOTE = "screenshots chosen by you"
+    CHOSEN_NONE_NOTE = "no screenshots - your choice"
+
+    def set_shots(self, md5, paths):
+        """Replace the screenshots of a held battle with the user's own pick.
+
+        The review window's override for when the matcher picked the wrong
+        files, or the player forgot to capture the first results screen
+        (Greg, PR #6: "i dont trust the auto matching"). Upload is unchanged:
+        whatever is attached when the battle uploads is sent, oldest first,
+        as shot1..N -- so this only changes WHICH files that is.
+
+        `paths` may be empty: no screenshots. Files the matcher had attached
+        and the user left out are forgotten (detached AND ignored): freed,
+        the matcher could hand them to another battle and upload them
+        unasked. They stay pickable here. Only a battle still waiting for
+        review can be changed, and a screenshot already sent with another
+        battle cannot be taken from it.
+
+        Raises ValueError with a message meant for the user.
+        """
+        row = self.store.replay(md5)
+        if row is None or row["state"] != HELD:
+            raise ValueError("this battle is no longer waiting for review")
+        paths = list(dict.fromkeys(paths))
+        if len(paths) > self.s["max_shots"]:
+            raise ValueError("at most %d screenshots per battle"
+                             % self.s["max_shots"])
+        for p in paths:
+            sh = self.store.shot(p)
+            if sh is None:
+                try:
+                    t = os.path.getmtime(p)
+                except OSError:
+                    raise ValueError("%s is no longer there" % os.path.basename(p))
+                w = h = None
+                try:
+                    from PIL import Image
+                    with Image.open(p) as im:
+                        w, h = im.size
+                except Exception:
+                    pass
+                self.store.add_shot(p, t, w, h)
+                continue
+            owner = sh["replay_md5"]
+            if owner and owner != md5:
+                o = self.store.replay(owner)
+                if sh["uploaded"] or (o is not None and o["state"] not in
+                                      (HELD, AWAITING_SHOTS)):
+                    raise ValueError("%s already belongs to %s"
+                                     % (os.path.basename(p),
+                                        self._label(o) if o else "another battle"))
+        dropped = [s["path"] for s in self.store.shots_for(md5)
+                   if s["path"] not in paths]
+        if dropped:
+            self.store.forget_shots(dropped)
+        self.store.assign_shots(paths, md5)
+        self.store.update_replay(
+            md5, note=self.CHOSEN_NOTE if paths else self.CHOSEN_NONE_NOTE)
+        self.log.info("%s: %s" % (
+            self._label(row),
+            "using the %d screenshot(s) you chose" % len(paths) if paths
+            else "no screenshots, as you chose"))
+        return [s["path"] for s in self.store.shots_for(md5)]
+
+    def upload_without_shots(self, md5):
+        """Upload a held battle with no screenshots at all."""
+        self.set_shots(md5, [])
+        self.confirm(md5)
 
     def skip(self, md5):
         self.store.update_replay(md5, state=SKIPPED, note="skipped by you")
