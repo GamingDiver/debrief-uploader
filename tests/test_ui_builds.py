@@ -67,6 +67,11 @@ class FakeEngine:
     def upload_without_shots(self, md5):
         self.did.append(("without", md5))
 
+    settling_now = (0, None)        # (count, decides_at) the window shows
+
+    def settling(self, now=None):
+        return self.settling_now
+
 
 class FakeSession:
     signed_in = True
@@ -1080,9 +1085,8 @@ class TestWindowsBuild(unittest.TestCase):
         """"it did appear ... but it took a minute-ish": the matcher waits
         in case another screenshot is coming; the window says so, and when."""
         import time as _t
-        store = FakeStore(rows=[])
-        store.free = [Row(dict(path="/x/a.png", t=_t.time() - 5))]
-        self.app.store = store
+        self.app.store = FakeStore(rows=[])
+        self.app.eng.settling_now = (1, _t.time() + 25)
         seen = {}
         self._drive(lambda: self.ui.open_review(self.app), [
             (lambda r: seen.update(t=self._texts(r)), 0)])

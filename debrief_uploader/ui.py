@@ -66,6 +66,46 @@ def _thread(fn, log, what):
 _SCALE = 1.0
 
 
+def _poll(widget, ms, fn, log=None, what="window"):
+    """Call fn() every ms milliseconds while widget lives; fn returning False
+    stops it.
+
+    One home for what every self-refreshing window needs. A call still
+    pending when the window closes fires into the destroyed window (the
+    Tcl_AsyncDelete crash family), so it is cancelled on <Destroy> -- with a
+    bare "after cancel", because after_cancel() also unregisters the
+    callback, which Tk 8.5 refuses mid-destroy. A failed refresh is logged,
+    not raised: one bad read must not kill the window."""
+    job = [None]
+
+    def run():
+        job[0] = None
+        if not widget.winfo_exists():
+            return
+        again = True
+        try:
+            again = fn()
+        except Exception as e:
+            if log is not None:
+                log.error("%s refresh failed (%s)" % (what, e))
+        if again is not False and widget.winfo_exists():
+            job[0] = widget.after(ms, run)
+
+    def stop(e):
+        # a binding on a toplevel also fires for each of its children
+        if e.widget is not widget or not job[0]:
+            return
+        try:
+            widget.tk.call("after", "cancel", job[0])
+        except Exception:
+            pass
+        job[0] = None
+
+    widget.bind("<Destroy>", stop, add="+")
+    job[0] = widget.after(ms, run)
+    return job
+
+
 def _px(n):
     return int(round(n * _SCALE))
 
@@ -568,16 +608,16 @@ def open_status(app):
         last = [None]
 
         def tick():
-            try:
-                c, rows, sig = snapshot()
-                if sig != last[0]:
-                    last[0] = sig
-                    render(c, rows)
-            except Exception as e:   # a failed read must not kill the window
-                app.log.error("status window refresh failed (%s)" % e)
-            r.after(REFRESH_MS, tick)
+            c, rows, sig = snapshot()
+            if sig != last[0]:
+                last[0] = sig
+                render(c, rows)
 
-        tick()
+        try:
+            tick()
+        except Exception as e:   # a failed read must not kill the window
+            app.log.error("status window refresh failed (%s)" % e)
+        _poll(r, REFRESH_MS, tick, app.log, "status window")
         r.mainloop()
 
     _thread(build, app.log, "the status window")
@@ -988,7 +1028,7 @@ def _pick_shots(parent, app, row, on_done):
         o = app.store.replay(sh["replay_md5"])
         name = app.eng._label(o) if o is not None else "another battle"
         if sh["uploaded"] or (o is not None and o["state"] not in
-                              (matcher.HELD, matcher.AWAITING_SHOTS)):
+                              matcher.REVIEWABLE):
             return "already sent with %s" % name, False
         return "now matched to %s - ticking moves it here" % name, True
 
@@ -1107,13 +1147,12 @@ def _pick_shots(parent, app, row, on_done):
         for, so it closes. A screenshot sent with another battle meanwhile
         -> unticked and greyed, as if it had been when the picker opened."""
         if not w.winfo_exists():
-            return
+            return False
         try:
             now_row = app.store.replay(md5)
-            if now_row is None or now_row["state"] not in (
-                    matcher.HELD, matcher.AWAITING_SHOTS):
+            if now_row is None or now_row["state"] not in matcher.REVIEWABLE:
                 close()
-                return
+                return False
             for path, _, var, tile in tiles:
                 cb, lbl, was_free = live[path]
                 whose, free = owner_of(path)
@@ -1130,7 +1169,6 @@ def _pick_shots(parent, app, row, on_done):
                 use.configure(text="Use these %d" % n if n else "Use none")
         except Exception as e:     # a failed read must not kill the picker
             app.log.error("screenshot picker refresh failed (%s)" % e)
-        w.after(1000, watch)
 
     w.protocol("WM_DELETE_WINDOW", close)
     w.bind("<Escape>", lambda e: close())
@@ -1140,7 +1178,7 @@ def _pick_shots(parent, app, row, on_done):
     use = _button(foot, "Use these %d" % n0 if n0 else "Use none", apply,
                   primary=True)
     use.pack(side="right")
-    w.after(1000, watch)
+    _poll(w, 1000, watch, app.log, "screenshot picker")
     w._tiles, w._apply, w._watch = tiles, apply, watch   # tests drive these
     return w
 
@@ -1209,19 +1247,7 @@ def _review_window(app, refresh_ms=1000):
         30-90 s the matcher waits in case another one is coming. Shown, so a
         battle with fresh screenshots is not a mystery for that minute
         (Stargatecraft, PR #6: "it did appear ... but it took a minute-ish")."""
-        rows = list(app.store.free_shots())
-        if not rows:
-            return 0, None
-        _, open_ = matcher.cluster_shots(
-            [matcher.ShotRec(x["path"], x["t"]) for x in rows],
-            app.s["pair_gap"], app.s["pair_settle"], time.time(),
-            app.s["pair_settle_full"])
-        if not open_:
-            return 0, None
-        return (sum(len(g) for g in open_),
-                max(matcher.decides_at(g, app.s["pair_settle"],
-                                       app.s["pair_settle_full"])
-                    for g in open_))
+        return app.eng.settling()
 
     def snapshot():
         held = list(app.store.replays([matcher.HELD]))
@@ -1453,42 +1479,22 @@ def _review_window(app, refresh_ms=1000):
         except Exception:
             pass
 
+    # A short step so a second tray click brings the window forward at once;
+    # the store is re-read only every refresh_ms.
     ticks = [0]
     step = 250
-    job = [None]
 
     def tick():
-        job[0] = None
-        if not r.winfo_exists():
-            return
         if _REVIEW["front"]:
             _REVIEW["front"] = False
             front()
         ticks[0] += step
         if ticks[0] >= refresh_ms:
             ticks[0] = 0
-            try:
-                refresh()
-            except Exception as e:   # a failed read must not kill the window
-                app.log.error("review window refresh failed (%s)" % e)
-        job[0] = r.after(step, tick)
-
-    def stop(e):
-        # A poll still pending when the window closes would fire into the
-        # destroyed window. Bound on the body, not r (a binding on the root
-        # fires for every child); a bare "after cancel", because
-        # after_cancel() also unregisters the callback, which Tk 8.5
-        # refuses mid-destroy.
-        if job[0]:
-            try:
-                r.tk.call("after", "cancel", job[0])
-            except Exception:
-                pass
-            job[0] = None
+            refresh()
 
     refresh(snap=first)
-    body.host.bind("<Destroy>", stop, add="+")
-    job[0] = r.after(step, tick)
+    _poll(r, step, tick, app.log, "review window")
     r.mainloop()
 
 
