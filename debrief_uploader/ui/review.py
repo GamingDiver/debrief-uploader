@@ -543,23 +543,34 @@ def _review_window(app, refresh_ms=1000):
             changed()
         return go
 
-    def card(pg, row, shots, waiting):
-        md5 = row["md5"]
-        t_close = row["t_close"] or 0
+    def card_box(pg, row, note, waiting=False):
+        """The panel every battle card starts with: its name, the note (when
+        there is one) and when its replay was saved. `waiting` marks a
+        battle still waiting for scorecards (tests find those cards by it)."""
         box = tk.Frame(pg, bg=PANEL, highlightbackground=LINE,
                        highlightthickness=1)
+        if waiting:
+            box._waiting = True
         box.pack(fill="x", pady=6)
         # a replay file name has no spaces; Tk still breaks it at the
         # panel's edge rather than cutting it off
         _label(box, app.eng._label(row), size=11, bold=True,
                bg=PANEL, anchor="w", wraplength=580).pack(
             fill="x", padx=10, pady=(8, 0))
-        _label(box, row["note"] or "needs confirmation", size=9, fg=MUTED,
-               bg=PANEL, anchor="w", wraplength=580).pack(fill="x", padx=10)
+        if note:
+            _label(box, note, size=9, fg=MUTED, bg=PANEL, anchor="w",
+                   wraplength=580).pack(fill="x", padx=10)
+        t_close = row["t_close"] or 0
         if t_close:
             _label(box, "Replay saved at %s" % _clock(t_close), size=8,
                    fg=MUTED, bg=PANEL, anchor="w", wraplength=580).pack(
                 fill="x", padx=10)
+        return box
+
+    def card(pg, row, shots, waiting):
+        md5 = row["md5"]
+        t_close = row["t_close"] or 0
+        box = card_box(pg, row, row["note"] or "needs confirmation")
 
         # which screenshots go up with it, and why these (Greg, PR #6: "i
         # dont trust the auto matching")
@@ -626,20 +637,7 @@ def _review_window(app, refresh_ms=1000):
         updating (Stargatecraft, PR #6). It can be settled from here."""
         md5 = row["md5"]
         t_close = row["t_close"] or 0
-        box = tk.Frame(pg, bg=PANEL, highlightbackground=LINE,
-                       highlightthickness=1)
-        box._waiting = True
-        box.pack(fill="x", pady=6)
-        _label(box, app.eng._label(row), size=11, bold=True,
-               bg=PANEL, anchor="w", wraplength=580).pack(
-            fill="x", padx=10, pady=(8, 0))
-        if row["note"]:
-            _label(box, row["note"], size=9, fg=MUTED, bg=PANEL, anchor="w",
-                   wraplength=580).pack(fill="x", padx=10)
-        if t_close:
-            _label(box, "Replay saved at %s" % _clock(t_close), size=8,
-                   fg=MUTED, bg=PANEL, anchor="w", wraplength=580).pack(
-                fill="x", padx=10)
+        box = card_box(pg, row, row["note"], waiting=True)
         if row["backfill"] or app.s.get("review_mode"):
             then = "it comes here for you to decide"
         elif app.s.get("upload_without_scorecards"):
