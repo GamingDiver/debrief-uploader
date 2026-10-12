@@ -37,7 +37,15 @@ def _base_logo(size):
     from PIL import Image
     if _BASE is None:
         try:
-            with Image.open(_res("app.ico")) as src:
+            # The tray gets its own art: the helmet alone, cropped to fill the
+            # square. app.ico (exe, installer, windows) carries the bubbles
+            # and padding, which made the tray icon read small beside its
+            # neighbours (Greg 2026-10-11). Falls back to app.ico.
+            try:
+                src = Image.open(_res("tray.png"))
+            except Exception:
+                src = Image.open(_res("app.ico"))
+            with src:
                 _BASE = src.convert("RGBA")
         except Exception:
             _BASE = _NO_LOGO
@@ -70,11 +78,15 @@ def _icon_image(colour):
     # 1. Logo first, 64 px, at x=0, y=0
     im.alpha_composite(logo, (0, 0))
 
-    # 2. Dot second, on top of the logo. Radius 15 px, center at x=48, y=16
+    # 2. Status dot on top, tucked into the top-right corner: radius 9 px,
+    # center (54, 10), with a 2 px dark ring so it reads as a badge over the
+    # helmet, which now fills the canvas.
     dot = Image.new("RGBA", (size * scale, size * scale), (0, 0, 0, 0))
-    cx, cy, r = 48 * scale, 16 * scale, 15 * scale
-    ImageDraw.Draw(dot).ellipse((cx - r, cy - r, cx + r, cy + r),
-                                fill=colour + (255,))
+    cx, cy, r, ring = 54 * scale, 10 * scale, 9 * scale, 2 * scale
+    d = ImageDraw.Draw(dot)
+    d.ellipse((cx - r - ring, cy - r - ring, cx + r + ring, cy + r + ring),
+              fill=(11, 22, 32, 255))
+    d.ellipse((cx - r, cy - r, cx + r, cy + r), fill=colour + (255,))
     im.alpha_composite(dot.resize((size, size), Image.LANCZOS))
 
     return im

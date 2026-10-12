@@ -402,8 +402,17 @@ class TestTrayIcon(unittest.TestCase):
     def test_status_dot_is_drawn_over_the_logo(self):
         im = tray._icon_image(tray.ATTN)
         self.assertEqual(im.size, (64, 64))
-        self.assertEqual(im.getpixel((48, 16))[:3], tray.ATTN)
+        self.assertEqual(im.getpixel((54, 10))[:3], tray.ATTN)
         self.assertGreater(im.getpixel((32, 40))[3], 0, "the logo is there")
+
+    def test_tray_art_is_the_helmet_filling_the_square(self):
+        # Greg 2026-10-11: the tray icon read small; the tray art is the
+        # helmet alone, edge to edge (no bubbles, little padding).
+        from PIL import Image
+        with Image.open(ui._res("tray.png")) as im:
+            bbox = im.convert("RGBA").getbbox()
+            w, h = im.size
+        self.assertGreaterEqual((bbox[3] - bbox[1]) / h, 0.9, "helmet fills the height")
 
     def test_missing_logo_falls_back_to_a_visible_mark(self):
         real = ui._res
