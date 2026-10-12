@@ -30,9 +30,9 @@ battles:
 You need Windows 10 or 11, the game, and a free
 [GamingDiver](https://gamingdiver.com) account to upload to.
 
-## Quick Install
+## Install
 
-No Python needed: the installer carries everything.
+The installer carries everything it needs, Python included.
 
 1. Download `DebriefUploader_Setup_<version>.exe` from the
    [latest release](https://github.com/GamingDiver/debrief-uploader/releases/latest).
@@ -53,13 +53,24 @@ No Python needed: the installer carries everything.
    *Finish*. A **diver icon appears in the system tray** (bottom right; click
    the `^` arrow if it is hidden).
 5. **The Settings window opens with the folders it found. Check them, then
-   press Start watching**, and **sign in** from the tray icon. Both work
-   exactly as in steps 4 and 5 of [Start it](#3-start-it) below; nothing is
-   read before Start watching and nothing uploads before you sign in.
-6. [Choose who can see your battles](#4-choose-who-can-see-your-battles)
-   and, if you like, [start it with Windows](#5-start-it-in-the-background-with-windows)
-   (the Settings checkbox; the Startup-folder alternative there is for the
-   zip install).
+   press Start watching.** Until you press it, nothing is read, copied or
+   sent. If a folder holds anything you must never upload, add it under
+   **Excluded folders** first (see
+   [Keeping folders private](#keeping-folders-private)). Only battles and
+   screenshots from **after** you press Start watching are ever considered:
+   whatever is already in those folders is left alone.
+6. Click the tray icon and choose **Sign in...**, then sign in the same way
+   you do on gamingdiver.com:
+   - **Sign in with Google** or **Sign in with Discord** if that is how you
+     made your account (most people). Your browser opens; sign in there, and
+     when it says *Signed in* you can close the tab. The uploader never sees
+     your Google or Discord password.
+   - **Email and password** only if your account has a password.
+
+   Nothing uploads until you have signed in.
+
+7. [Choose who can see your battles](#choose-who-can-see-your-battles)
+   and, if you like, [start it with Windows](#start-it-with-windows).
 
 **Updating:** quit from the tray icon and run the new installer. It installs
 over the old version; your sign-in, settings and upload history carry over.
@@ -73,7 +84,98 @@ you want them gone.
 when I log in* and quit it, then install. Tick the box again in the installed
 copy so log-in starts the installed one.
 
-## Detailed Install
+## Choose who can see your battles
+
+Before your first battle, decide who can watch what you upload: tray icon ->
+**Settings...** -> **Uploads** -> **Visibility for new uploads**.
+
+| Setting | Who can watch the battle |
+|---|---|
+| **Public** (the default) | Anyone with the link, and it is listed in the Debrief community list. Your gamertag and your fleet's name show on it. |
+| **Fleet** | Only signed-in members of your fleet. |
+| **Private** | Only you. |
+| **Use my site default** | Whatever you chose on the [Debrief page](https://gamingdiver.com/wowslegends/replays/) under *Visibility for new uploads*. That is **Public** unless you changed it. |
+
+Good to know:
+
+- **You can change it per battle later.** Open the battle's page on
+  GamingDiver and pick a different visibility; making one private takes it
+  out of the community list straight away.
+- **Training rooms are separate** and upload as **Private** by default
+  (*Training-room battles*, just below). See [Training rooms](#training-rooms).
+- **Both sides of a battle can be merged.** When a teammate or an opponent
+  uploads the same battle, Debrief can combine both views into one fuller
+  replay, but never in a way that shows your upload to more people than you
+  chose: a Public upload can be merged into any other; a Fleet upload only
+  into uploads from the same fleet that are Fleet or Private; a Private
+  upload never.
+- Site admins can open any upload, including private ones, but only to fix
+  problems with the site.
+
+## Start it with Windows
+
+So you never have to remember to start it before playing.
+
+**Recommended: one click in Settings**
+
+Tray icon -> **Settings...** -> under **Startup**, tick **Start
+automatically when I log in**. It takes effect the moment you tick it (the
+line underneath confirms "will start when you log in").
+
+That's it. From then on it starts silently when you log in to Windows: no
+window, not even a flash, just the diver icon in the tray. It adds itself to
+your own startup list (the same place Discord and Steam use), so it needs no
+administrator rights and shows up under **Task Manager -> Startup apps**,
+where you can also switch it off. Untick the box to remove it.
+
+**Alternative for the zip install: the Startup folder**
+
+If you would rather manage startup apps yourself, a shortcut in your Startup
+folder works too:
+
+1. Press `Win`+`R`, type `shell:startup`, press Enter. Your personal Startup
+   folder opens.
+2. In a second Explorer window, open the uploader folder, **right-click
+   `Start-DebriefUploader.cmd`** and choose **Show more options -> Create
+   shortcut** (Windows 11) or **Create shortcut** (Windows 10).
+3. Drag the new shortcut into the Startup folder.
+4. Right-click the shortcut in the Startup folder -> **Properties** -> set
+   **Run** to **Minimized** -> OK, so logon shows no black window.
+
+Or create the same shortcut by running this in PowerShell **from inside the
+uploader folder**:
+
+```powershell
+$s = (New-Object -ComObject WScript.Shell).CreateShortcut("$([Environment]::GetFolderPath('Startup'))\Debrief Uploader.lnk")
+$s.TargetPath = "$PWD\Start-DebriefUploader.cmd"; $s.WorkingDirectory = "$PWD"; $s.WindowStyle = 7; $s.Save()
+```
+
+To undo it, delete the shortcut (or switch it off under *Settings -> Apps ->
+Startup*).
+
+Using both is harmless: the second copy sees the first and exits.
+
+Either way, check it worked by signing out of Windows and back in: the diver
+icon should appear in the tray on its own.
+
+## The tray icon
+
+| | |
+|---|---|
+| **Sign in...** | shown until you are signed in; nothing uploads before then |
+| **Review (n)** | resolve anything it would not guess at |
+| **Status...** | what it has seen and uploaded, with links |
+| **Settings...** | account, folders, visibility, review mode, scan limits, start-at-logon |
+| **Why isn't it uploading?** | the full diagnosis, same as `Debrief.cmd doctor` |
+| **Check now** | don't wait out the poll interval |
+| **Pause / Resume**, **Quit** | |
+
+**Start automatically when I log in** is a checkbox in Settings; see
+[Start it in the background with Windows](#start-it-with-windows).
+
+## Install from the zip (advanced)
+
+Only if you would rather run it from source with your own Python. Most people should use the [installer](#install).
 
 ### 1. Install Python (one time)
 
@@ -137,81 +239,7 @@ copy so log-in starts the installed one.
 Double-clicking the launcher again is safe: if it is already running, the
 second copy just exits.
 
-### 4. Choose who can see your battles
-
-Before your first battle, decide who can watch what you upload: tray icon ->
-**Settings...** -> **Uploads** -> **Visibility for new uploads**.
-
-| Setting | Who can watch the battle |
-|---|---|
-| **Public** (the default) | Anyone with the link, and it is listed in the Debrief community list. Your gamertag and your fleet's name show on it. |
-| **Fleet** | Only signed-in members of your fleet. |
-| **Private** | Only you. |
-| **Use my site default** | Whatever you chose on the [Debrief page](https://gamingdiver.com/wowslegends/replays/) under *Visibility for new uploads*. That is **Public** unless you changed it. |
-
-Good to know:
-
-- **You can change it per battle later.** Open the battle's page on
-  GamingDiver and pick a different visibility; making one private takes it
-  out of the community list straight away.
-- **Training rooms are separate** and upload as **Private** by default
-  (*Training-room battles*, just below). See [Training rooms](#training-rooms).
-- **Both sides of a battle can be merged.** When a teammate or an opponent
-  uploads the same battle, Debrief can combine both views into one fuller
-  replay, but never in a way that shows your upload to more people than you
-  chose: a Public upload can be merged into any other; a Fleet upload only
-  into uploads from the same fleet that are Fleet or Private; a Private
-  upload never.
-- Site admins can open any upload, including private ones, but only to fix
-  problems with the site.
-
-### 5. Start it in the background with Windows
-
-So you never have to remember to start it before playing.
-
-**Recommended: one click in Settings**
-
-Tray icon -> **Settings...** -> under **Startup**, tick **Start
-automatically when I log in**. It takes effect the moment you tick it (the
-line underneath confirms "will start when you log in").
-
-That's it. From then on it starts silently when you log in to Windows: no
-window, not even a flash, just the diver icon in the tray. It adds itself to
-your own startup list (the same place Discord and Steam use), so it needs no
-administrator rights and shows up under **Task Manager -> Startup apps**,
-where you can also switch it off. Untick the box to remove it.
-
-**Alternative: the Startup folder**
-
-If you would rather manage startup apps yourself, a shortcut in your Startup
-folder works too:
-
-1. Press `Win`+`R`, type `shell:startup`, press Enter. Your personal Startup
-   folder opens.
-2. In a second Explorer window, open the uploader folder, **right-click
-   `Start-DebriefUploader.cmd`** and choose **Show more options -> Create
-   shortcut** (Windows 11) or **Create shortcut** (Windows 10).
-3. Drag the new shortcut into the Startup folder.
-4. Right-click the shortcut in the Startup folder -> **Properties** -> set
-   **Run** to **Minimized** -> OK, so logon shows no black window.
-
-Or create the same shortcut by running this in PowerShell **from inside the
-uploader folder**:
-
-```powershell
-$s = (New-Object -ComObject WScript.Shell).CreateShortcut("$([Environment]::GetFolderPath('Startup'))\Debrief Uploader.lnk")
-$s.TargetPath = "$PWD\Start-DebriefUploader.cmd"; $s.WorkingDirectory = "$PWD"; $s.WindowStyle = 7; $s.Save()
-```
-
-To undo it, delete the shortcut (or switch it off under *Settings -> Apps ->
-Startup*).
-
-Using both is harmless: the second copy sees the first and exits.
-
-Either way, check it worked by signing out of Windows and back in: the diver
-icon should appear in the tray on its own.
-
-### Updating
+### Updating the zip install
 
 Quit from the tray icon, unzip the new release **over the same folder**, and
 start it again. Your sign-in, settings and upload history live in
@@ -219,23 +247,10 @@ start it again. Your sign-in, settings and upload history live in
 carry over, and the Startup shortcut keeps working because the folder did not
 move.
 
-### The tray icon
+### Building it yourself
 
-| | |
-|---|---|
-| **Sign in...** | shown until you are signed in; nothing uploads before then |
-| **Review (n)** | resolve anything it would not guess at |
-| **Status...** | what it has seen and uploaded, with links |
-| **Settings...** | account, folders, visibility, review mode, scan limits, start-at-logon |
-| **Why isn't it uploading?** | the full diagnosis, same as `Debrief.cmd doctor` |
-| **Check now** | don't wait out the poll interval |
-| **Pause / Resume**, **Quit** | |
-
-**Start automatically when I log in** is a checkbox in Settings; see
-[Start it in the background with Windows](#5-start-it-in-the-background-with-windows).
-
-**To build a standalone `.exe`** that needs no Python at all — run this *on the
-Windows PC*, since PyInstaller bundles the interpreter of the machine it runs
+The release installer is built by CI. To build the standalone `.exe`
+locally, run this *on the Windows PC*, since PyInstaller bundles the interpreter of the machine it runs
 on and cannot cross-compile:
 
 ```powershell
