@@ -7,7 +7,7 @@ colours. Rounded corners come from DWM on Windows 11 and a window region on
 Windows 10. Everything here is best-effort: any Win32 failure leaves the
 plain window. Contributed by Stargatecraft (PR #6).
 
-ui.py calls frame() + set_icon() before the window is shown and finish()
+ui/core.py calls frame() + set_icon() before the window is shown and finish()
 once it is placed.
 """
 import ctypes

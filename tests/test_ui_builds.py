@@ -191,12 +191,12 @@ class TestWindowsBuild(unittest.TestCase):
             r.after(60, r.destroy)
             return r
 
-        ui._thread = sync
-        ui._root = quick_root
+        ui.core._thread = sync
+        ui.core._root = quick_root
 
     def tearDown(self):
-        self.ui._thread = self._real_thread
-        self.ui._root = self._real_root
+        self.ui.core._thread = self._real_thread
+        self.ui.core._root = self._real_root
         os.environ.pop("GD_UPLOADER_HOME", None)
         # Free this test's Tk objects now, on the thread that made them, as
         # ui._thread does in the app. Left to the cyclic GC they are freed on
@@ -234,7 +234,7 @@ class TestWindowsBuild(unittest.TestCase):
             r.after(60, r.destroy)
             return r
 
-        self.ui._root = capture_root
+        self.ui.core._root = capture_root
         self.ui.open_status(self.app)
         self.assertEqual(self.errors, [])
         self.assertIn("status", seen["title"])
@@ -264,7 +264,7 @@ class TestWindowsBuild(unittest.TestCase):
             r.after(2600, check)       # one REFRESH_MS (2 s) after the insert
             return r
 
-        self.ui._root = live_root
+        self.ui.core._root = live_root
         self.ui.open_status(self.app)
         self.assertEqual(self.errors, [])
         self.assertIn("def456", seen["text"])
@@ -313,7 +313,7 @@ class TestWindowsBuild(unittest.TestCase):
             return r
 
         oauth.sign_in_browser = fake_sib
-        self.ui._root = root
+        self.ui.core._root = root
         try:
             self.ui.open_sign_in(self.app, on_done=lambda: done.append(1))
         finally:
@@ -367,7 +367,7 @@ class TestWindowsBuild(unittest.TestCase):
             r.after(4000, lambda: r.winfo_exists() and r.destroy())
             return r
 
-        self.ui._root = root
+        self.ui.core._root = root
         self.ui.open_settings(self.app)
         self.assertEqual(self.errors, [])
         fresh = config.Settings.load()     # re-read from disk
@@ -404,7 +404,7 @@ class TestWindowsBuild(unittest.TestCase):
             r.after(4000, lambda: r.winfo_exists() and r.destroy())
             return r
 
-        self.ui._root = root
+        self.ui.core._root = root
         self.ui.open_settings(self.app)
         self.assertEqual(self.errors, [])
         for g in (winframe.MINIMIZE, winframe.MAXIMIZE, winframe.CLOSE):
@@ -442,7 +442,7 @@ class TestWindowsBuild(unittest.TestCase):
             r.after(500, probe)
             return r
 
-        self.ui._root = root
+        self.ui.core._root = root
         self.ui.open_settings(self.app)
         self.assertEqual(self.errors, [])
         self.assertEqual(seen["codes"], [4, 5, 7, 8])
@@ -473,7 +473,7 @@ class TestWindowsBuild(unittest.TestCase):
             r.after(500, measure)
             return r
 
-        self.ui._root = root
+        self.ui.core._root = root
         self.ui.open_settings(self.app)
         self.assertEqual(self.errors, [])
         l, t, rt, b = seen["rect"]
@@ -555,7 +555,7 @@ class TestWindowsBuild(unittest.TestCase):
             r.after(400, act)
             return r
 
-        self.ui._root = root
+        self.ui.core._root = root
         self.ui.open_settings(self.app)
         self.assertEqual(self.errors, [])
         self.assertEqual(seen["grips"], [seen["x"]] * 2)
@@ -600,7 +600,7 @@ class TestWindowsBuild(unittest.TestCase):
             guard = r.after(15000, lambda: r.winfo_exists() and r.destroy())
             return r
 
-        self.ui._root = root
+        self.ui.core._root = root
         opener()
         self.assertEqual(self.errors, [])
         if failures:
@@ -1153,7 +1153,7 @@ class TestWindowsBuild(unittest.TestCase):
             r.after(60, r.destroy)
             return r
 
-        self.ui._root = capture_root
+        self.ui.core._root = capture_root
 
         self.app.store = FakeStore(held=[])
         self.ui.open_review(self.app)
@@ -1171,7 +1171,7 @@ class TestWindowsBuild(unittest.TestCase):
         Pixel sizes must grow with them or text crowds out the controls."""
         real = self.ui._SCALE
         try:
-            self.ui._SCALE = 1.75
+            self.ui.core._SCALE = 1.75
             self.assertEqual(self.ui._px(640), 1120)
             import tkinter as tk
             r = tk.Tk()
@@ -1181,7 +1181,7 @@ class TestWindowsBuild(unittest.TestCase):
             finally:
                 r.destroy()
         finally:
-            self.ui._SCALE = real
+            self.ui.core._SCALE = real
 
     def test_settings_window_builds_before_first_confirm(self):
         self.app.s["watching_confirmed"] = False
