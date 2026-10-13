@@ -60,6 +60,26 @@ class TestCliRunsAsASubprocess(unittest.TestCase):
         with open(os.path.join(ROOT, "installer.iss"), encoding="utf-8") as f:
             self.assertIn("RunName = '%s';" % autostart.NAME, f.read())
 
+    def test_installer_startup_entry_matches_the_app(self):
+        """The installer's Run value must be exactly what autostart.command()
+        writes for the built exe, or the app would call it stale."""
+        import sys
+        from debrief_uploader import autostart
+        with open(os.path.join(ROOT, "installer.iss"), encoding="utf-8") as f:
+            iss = f.read()
+        self.assertIn('ValueName: "%s"' % autostart.NAME, iss)
+        frozen, exe = getattr(sys, "frozen", None), sys.executable
+        sys.frozen, sys.executable = True, "{app}\\DebriefUploader.exe"
+        try:
+            cmd = autostart.command()
+        finally:
+            sys.executable = exe
+            if frozen is None:
+                del sys.frozen
+            else:
+                sys.frozen = frozen
+        self.assertIn('ValueData: "%s"' % cmd.replace('"', '""'), iss)
+
     def test_status_works(self):
         import shutil
         home = os.path.join(ROOT, ".tmp-home-status")

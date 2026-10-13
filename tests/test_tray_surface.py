@@ -114,19 +114,20 @@ class TestAutostart(unittest.TestCase):
     Registry and schtasks are injected, so this runs on any machine."""
 
     class Reg:
+        """Run values in .v; Task Manager's StartupApproved marks in .approved."""
         def __init__(self, fail=False):
-            self.v, self.fail = {}, fail
+            self.v, self.fail, self.approved = {}, fail, {}
 
-        def get(self, n):
-            return self.v.get(n)
+        def get(self, n, key=autostart.RUN_KEY):
+            return (self.v if key == autostart.RUN_KEY else self.approved).get(n)
 
         def set(self, n, val):
             if self.fail:
                 raise PermissionError("Access is denied")
             self.v[n] = val
 
-        def delete(self, n):
-            self.v.pop(n, None)
+        def delete(self, n, key=autostart.RUN_KEY):
+            (self.v if key == autostart.RUN_KEY else self.approved).pop(n, None)
 
     class Tasks:
         """schtasks: rc for /Query (legacy task present?) and /Delete."""
@@ -217,6 +218,42 @@ class TestAutostart(unittest.TestCase):
             reg.delete(name)
         self.assertIsNone(reg.get(name))
         reg.delete(name)                       # deleting twice is harmless
+
+    def test_an_entry_for_another_copy_is_stale_not_enabled(self):
+        """2026-10-12: no start after a reboot. An entry naming an old or
+        removed copy must not tick the box, and the tray repairs it."""
+        reg, tasks = self.Reg(), self.Tasks()
+        reg.v[autostart.NAME] = '"C:\\Old\\Gone\\DebriefUploader.exe" run --tray --quiet'
+        self.assertEqual(autostart.status(reg=reg, run=tasks), "stale")
+        self.assertFalse(autostart.is_enabled(reg=reg, run=tasks))
+        self.assertIn("another or a removed copy", autostart.explain(reg=reg, run=tasks))
+        self.assertEqual(autostart.repair(reg=reg, run=tasks), "startup entry now points at this copy")
+        self.assertEqual(reg.v[autostart.NAME], autostart.command())
+        self.assertTrue(autostart.is_enabled(reg=reg, run=tasks))
+
+    def test_repair_never_creates_an_entry(self):
+        reg, tasks = self.Reg(), self.Tasks()
+        self.assertIsNone(autostart.repair(reg=reg, run=tasks))
+        self.assertNotIn(autostart.NAME, reg.v)
+
+    def test_switched_off_in_task_manager_reads_as_off_and_ticking_clears_it(self):
+        reg, tasks = self.Reg(), self.Tasks()
+        autostart.enable(reg=reg, run=tasks)
+        reg.approved[autostart.NAME] = bytes([3]) + bytes(11)
+        self.assertEqual(autostart.status(reg=reg, run=tasks), "blocked")
+        self.assertFalse(autostart.is_enabled(reg=reg, run=tasks))
+        self.assertIsNone(autostart.repair(reg=reg, run=tasks))      # never overrides it
+        self.assertIn("Task Manager", autostart.explain(reg=reg, run=tasks))
+        ok, _ = autostart.enable(reg=reg, run=tasks)
+        self.assertTrue(ok)
+        self.assertNotIn(autostart.NAME, reg.approved)
+        self.assertTrue(autostart.is_enabled(reg=reg, run=tasks))
+
+    def test_task_manager_on_mark_is_not_blocked(self):
+        reg, tasks = self.Reg(), self.Tasks()
+        autostart.enable(reg=reg, run=tasks)
+        reg.approved[autostart.NAME] = bytes([2]) + bytes(11)
+        self.assertEqual(autostart.status(reg=reg, run=tasks), "on")
 
     def test_unsupported_platform_is_honest(self):
         autostart.supported = lambda: False

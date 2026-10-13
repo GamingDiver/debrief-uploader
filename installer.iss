@@ -28,6 +28,15 @@ Name: "{autodesktop}\Debrief Uploader"; Filename: "{app}\DebriefUploader.exe"; P
 
 [Tasks]
 Name: "desktopicon"; Description: "Create a desktop icon"
+; Ticked by default: an uploader that does not start after a reboot uploads
+; nothing (2026-10-12). Same Run value Settings writes; it can be switched off
+; there or in Task Manager -> Startup apps.
+Name: "autostart"; Description: "Start automatically when I log in"
+
+[Registry]
+; HKCU, like Settings: no admin rights needed. The data must stay identical to
+; autostart.command() for the frozen exe, or the app reads it as stale.
+Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "GamingDiver Debrief Uploader"; ValueData: """{app}\DebriefUploader.exe"" run --tray --quiet"; Tasks: autostart
 
 [Run]
 ; runasoriginaluser: an all-users install runs Setup elevated, and the app

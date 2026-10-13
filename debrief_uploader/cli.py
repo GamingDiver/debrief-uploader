@@ -287,7 +287,15 @@ def cmd_run(args):
             return 1
 
         if args.tray:
-            from . import tray
+            from . import autostart, tray
+            # The copy you open is the one that starts next time: an entry
+            # left pointing at an old or removed copy is quietly fixed here.
+            try:
+                fixed = autostart.repair()
+            except Exception as e:              # never block the tray on this
+                fixed = "could not check the startup entry (%s)" % e
+            if fixed:
+                log.info(fixed)
             return tray.run(s, store, client, log)
 
         eng = Engine(s, store, client, log)

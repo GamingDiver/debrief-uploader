@@ -302,6 +302,9 @@ class _SettingsWindow:
         if not autostart.supported():
             cb.configure(state="disabled")
             auto_msg.configure(text="Only available on Windows.")
+        else:
+            # Unticked for a reason the user should know (stale / Task Manager).
+            auto_msg.configure(text=autostart.explain())
         auto_msg.pack(anchor="w", padx=12, pady=(0, 11))
         self.auto = auto
 
