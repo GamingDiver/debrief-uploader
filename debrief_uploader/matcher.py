@@ -35,6 +35,11 @@ SKIPPED = "skipped"
 # held or orphaned is not up for grabs (spec condition B).
 PAIRABLE = (AWAITING_SHOTS,)
 
+# States whose screenshots the user can still change from the review window:
+# held for a decision, or still waiting for scorecards. A screenshot attached
+# to a battle in any other state has gone (or is going) up with it.
+REVIEWABLE = (HELD, AWAITING_SHOTS)
+
 TRAINING = "training_room"
 
 

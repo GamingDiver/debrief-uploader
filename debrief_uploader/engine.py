@@ -68,7 +68,7 @@ class Engine:
             t0 = min(s["t"] for s in shots)
             rec = _rec(row)
             rivals = [
-                _rec(o) for o in self.store.replays([AWAITING_SHOTS, HELD])
+                _rec(o) for o in self.store.replays(list(matcher.REVIEWABLE))
                 if o["md5"] != row["md5"] and (o["t_close"] or 0) < rec.t_close
                 and t0 - (o["t_close"] or 0) <= self.s["max_lag"]
             ]
@@ -356,15 +356,11 @@ class Engine:
         rows = self.store.free_shots()
         if not rows:
             return 0
-        shots = [ShotRec(r["path"], r["t"]) for r in rows]
-        closed, open_ = matcher.cluster_shots(
-            shots, self.s["pair_gap"], self.s["pair_settle"], now,
-            self.s["pair_settle_full"])
+        closed, open_ = self.shot_groups(now, rows)
         for g in open_:
             # A silent wait is indistinguishable from a stall. Say once, per
             # group, exactly when the decision lands.
-            when = matcher.decides_at(g, self.s["pair_settle"],
-                                      self.s["pair_settle_full"])
+            when = self.decides_at(g)
             self._say_once(
                 "settle:%s" % g.t_last,
                 "%d screenshot(s) held until %s in case you take another"
@@ -406,6 +402,32 @@ class Engine:
         # files themselves are never touched.
         self.store.prune_shots(now - self.s["unmatched_keep"])
         return done
+
+    # ---- screenshot groups ------------------------------------------------
+    # One place that groups the free screenshots the way the matcher does, so
+    # matching, the heartbeat, the diagnosis and the review window cannot
+    # disagree about what is still settling.
+    def shot_groups(self, now=None, rows=None):
+        """(closed, open) groups of the free screenshots."""
+        rows = self.store.free_shots() if rows is None else rows
+        return matcher.cluster_shots(
+            [ShotRec(r["path"], r["t"]) for r in rows],
+            self.s["pair_gap"], self.s["pair_settle"],
+            now if now is not None else time.time(), self.s["pair_settle_full"])
+
+    def decides_at(self, group):
+        """When the matcher stops waiting for another shot in this group."""
+        return matcher.decides_at(group, self.s["pair_settle"],
+                                  self.s["pair_settle_full"])
+
+    def settling(self, now=None):
+        """(count, latest decision time) of screenshots still settling,
+        or (0, None)."""
+        _closed, open_ = self.shot_groups(now)
+        if not open_:
+            return 0, None
+        return (sum(len(g) for g in open_),
+                max(self.decides_at(g) for g in open_))
 
     def _label(self, row):
         ship = (row["player_ship"] or "").split("-", 1)[-1].replace("-", " ")
@@ -576,7 +598,7 @@ class Engine:
         Raises ValueError with a message meant for the user.
         """
         row = self.store.replay(md5)
-        if row is None or row["state"] not in (HELD, AWAITING_SHOTS):
+        if row is None or row["state"] not in matcher.REVIEWABLE:
             raise ValueError("this battle is no longer waiting for review")
         paths = list(dict.fromkeys(paths))
         if len(paths) > self.s["max_shots"]:
@@ -602,7 +624,7 @@ class Engine:
             if owner and owner != md5:
                 o = self.store.replay(owner)
                 if sh["uploaded"] or (o is not None and o["state"] not in
-                                      (HELD, AWAITING_SHOTS)):
+                                      matcher.REVIEWABLE):
                     raise ValueError("%s already belongs to %s"
                                      % (os.path.basename(p),
                                         self._label(o) if o else "another battle"))
@@ -681,10 +703,7 @@ class Engine:
                 bits.append("%d %s" % (counts[state], word))
         free = self.store.free_shots()
         if free:
-            shots = [ShotRec(r["path"], r["t"]) for r in free]
-            _closed, open_ = matcher.cluster_shots(
-                shots, self.s["pair_gap"], self.s["pair_settle"], now,
-                self.s["pair_settle_full"])
+            _closed, open_ = self.shot_groups(now, free)
             waiting = sum(len(g) for g in open_)
             if waiting:
                 bits.append("%d screenshot(s) still settling" % waiting)
@@ -792,13 +811,9 @@ class Engine:
         if not free:
             add("  nothing to match")
         else:
-            shots = [ShotRec(r["path"], r["t"]) for r in free]
-            closed, open_ = matcher.cluster_shots(
-                shots, self.s["pair_gap"], self.s["pair_settle"], now,
-                self.s["pair_settle_full"])
+            closed, open_ = self.shot_groups(now, free)
             for g in open_:
-                when = matcher.decides_at(g, self.s["pair_settle"],
-                                          self.s["pair_settle_full"])
+                when = self.decides_at(g)
                 add("  %d shot(s) still open - decides at %s (in %ds)"
                     % (len(g), time.strftime("%H:%M:%S", time.localtime(when)),
                        max(0, when - now)))

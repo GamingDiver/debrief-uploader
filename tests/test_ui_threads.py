@@ -68,7 +68,7 @@ CHILD = textwrap.dedent(r'''
         r.after(400, close)
         r.after(4000, lambda: r.winfo_exists() and r.destroy())
         return r
-    ui._root = root
+    ui.core._root = root
     for opener in (ui.open_status, ui.open_settings, ui.open_status, ui.open_doctor):
         n = len(done)
         opener(app)                      # real ui._thread: its own thread

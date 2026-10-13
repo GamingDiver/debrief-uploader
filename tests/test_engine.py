@@ -831,6 +831,25 @@ class TestHoldsAreRecheckedOnStart(EngineCase):
         self.assertEqual(self.store.replay("B")["state"], matcher.HELD)
 
 
+class TestShotGroups(EngineCase):
+    """Engine.shot_groups / settling: the one grouping the matcher, the
+    heartbeat, the diagnosis and the review window all read."""
+
+    def test_settling_counts_open_groups_and_says_when(self):
+        now = time.time()
+        self.assertEqual(self.eng.settling(now), (0, None))
+        for i, name in enumerate(("a.png", "b.png")):
+            p = self.make_shot(name, mtime=now - 10 + i)
+            self.store.add_shot(p, now - 10 + i, 1920, 1080)
+        n, when = self.eng.settling(now)
+        self.assertEqual(n, 2)
+        _closed, open_ = self.eng.shot_groups(now)
+        self.assertEqual(when, max(self.eng.decides_at(g) for g in open_))
+        self.assertGreater(when, now)
+        # long after, the same shots are closed: nothing is settling
+        self.assertEqual(self.eng.settling(now + 3600), (0, None))
+
+
 class TestUserChosenScreenshots(EngineCase):
     """The review window's override (Greg, PR #6: "i dont trust the auto
     matching as sometimes i forget to screenshot"). Whatever the user picks
