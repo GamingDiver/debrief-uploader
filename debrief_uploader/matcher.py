@@ -77,6 +77,10 @@ class Cluster:
         return len(self.shots)
 
 
+# The hold reason engine._recheck_held() may release on start; it is also
+# stored as the start of the held row's note.
+AMBIGUOUS_REASON = "an earlier battle is still missing its scorecards"
+
 # ---- decisions -------------------------------------------------------------
 AUTO = "auto"        # confident: upload it
 HOLD = "hold"        # ambiguous: ask a human, never guess
@@ -193,7 +197,7 @@ def match_cluster(cluster, replays, cfg):
     if older:
         older.sort(key=lambda r: r.t_close, reverse=True)
         return Decision(HOLD, replay=best, alternatives=older,
-                        reason="an earlier battle is still missing its scorecards")
+                        reason=AMBIGUOUS_REASON)
 
     if len(cluster) < 2:
         return Decision(HOLD, replay=best,

@@ -151,11 +151,21 @@ class Store:
             args = (since,)
         return self._all(q + " ORDER BY t", args)
 
+    def shot(self, path):
+        return self._one("SELECT * FROM shots WHERE path=?", (path,))
+
     def shots_for(self, md5):
         return self._all("SELECT * FROM shots WHERE replay_md5=? ORDER BY t", (md5,))
 
     def attach_shots(self, paths, md5):
         self._writemany("UPDATE shots SET replay_md5=? WHERE path=?",
+                        [(md5, p) for p in paths])
+
+    def assign_shots(self, paths, md5):
+        """The user's own choice (review window): these belong to md5, even
+        if they were ignored or the matcher had given them to another
+        battle."""
+        self._writemany("UPDATE shots SET replay_md5=?, ignored=0 WHERE path=?",
                         [(md5, p) for p in paths])
 
     def detach_shots(self, md5):
