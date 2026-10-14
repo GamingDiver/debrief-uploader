@@ -2,5 +2,7 @@
 # hashing, DPAPI via ctypes, the CLI, tkinter) is Python's standard library,
 # which keeps the PyInstaller build small and the install on a gaming PC dull.
 Pillow>=10.0        # the scorecard transform; must match the browser's geometry
-pystray==0.19.5     # system tray icon -- only needed for `run --tray`; pinned:
-                    # tray.py patches private pystray members (custom menu)
+pystray>=0.19.5,<0.20  # system tray icon -- only needed for `run --tray`.
+                    # tray.py patches private pystray members (custom menu),
+                    # checked against 0.19.5; a release that renames them
+                    # falls back to pystray's own menu (_install_menus)
