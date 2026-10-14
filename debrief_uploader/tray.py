@@ -407,12 +407,11 @@ class _PopupHost:
         except Exception:
             pass
 
-        rc = getattr(ui, "_round_corners", None)
-        if rc:
-            try:
-                rc(top)
-            except Exception:
-                pass
+        try:
+            from .winframe import _round_corners
+            _round_corners(top, self.p)
+        except Exception:
+            pass
         top.deiconify()
         top.update_idletasks()
 
@@ -464,6 +463,27 @@ class _PopupHost:
 _HOST = [None]
 
 
+def _install_menus(custom=None):
+    """Style / replace the tray menu, or leave pystray's own menu alone.
+
+    Both variants patch PRIVATE pystray members (Icon._on_notify,
+    Icon._create_menu_item). A pystray that renamed them must cost the user
+    the pretty menu, never the tray: any failure here falls back to the
+    native menu. Returns True when the custom popup is installed."""
+    try:
+        _style_tray_menu()
+    except Exception as e:
+        print("tray menu: native menu left unstyled (%s)" % e)
+    if not (CUSTOM_MENU if custom is None else custom):
+        return False
+    try:
+        _install_custom_menu()
+        return True
+    except Exception as e:
+        print("tray menu: using the native menu (%s)" % e)
+        return False
+
+
 def _install_custom_menu():
     """Right click on the tray icon opens our popup instead of the native menu."""
     if os.name != "nt":
@@ -472,7 +492,9 @@ def _install_custom_menu():
     from ctypes import wintypes
     from pystray import _win32 as pw
 
-    original = pw.Icon._on_notify
+    original = pw.Icon._on_notify          # AttributeError if pystray changed
+    if not hasattr(pw.Icon, "_handler"):
+        raise AttributeError("pystray Icon has no _handler")
     _HOST[0] = _PopupHost()
 
     def on_notify(self, wparam, lparam):
@@ -693,9 +715,7 @@ class Tray:
 
         # Both must run before pystray.Icon(...): pystray binds its private
         # handlers when the icon is created.
-        _style_tray_menu()
-        if CUSTOM_MENU:
-            _install_custom_menu()
+        _install_menus()
 
         self.icon = pystray.Icon("gd-debrief", _icon_image(self._colour()),
                                  self._title(), menu=self._build_menu())
