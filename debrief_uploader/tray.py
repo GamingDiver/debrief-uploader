@@ -7,6 +7,7 @@ is a complete fallback and `review` resolves anything waiting.
 Needs pystray. tkinter ships with Python on Windows.
 """
 import os
+import queue
 import subprocess
 import sys
 import threading
@@ -22,6 +23,11 @@ IDLE = (0x64, 0x7d, 0x8e)
 WATCH = (0x0f, 0x6b, 0x70)
 BUSY = (0xff, 0xd1, 0x66)
 ATTN = (0xa8, 0x41, 0x0e)
+
+# True: right click opens our own themed popup. False: native Windows menu
+# (dark, with the logo in front of the title). Needs pystray==0.19.5, because
+# both variants reach into private pystray members.
+CUSTOM_MENU = True
 
 _BASE = None
 _NO_LOGO = object()
@@ -90,6 +96,419 @@ def _icon_image(colour):
     im.alpha_composite(dot.resize((size, size), Image.LANCZOS))
 
     return im
+
+
+# ---------------------------------------------------------- native menu -----
+
+def _style_tray_menu():
+    """Dark native menus and the logo in front of the title item. Windows only.
+
+    This is the fallback when CUSTOM_MENU is False or the custom popup fails.
+    """
+    if os.name != "nt":
+        return
+    import ctypes
+    from ctypes import wintypes
+
+    # 1. dark menus: 2 = always dark, 1 = follow the system setting
+    try:
+        ux = ctypes.WinDLL("uxtheme")
+        ux[135](2)      # SetPreferredAppMode
+        ux[136]()       # FlushMenuThemes
+    except Exception:
+        pass
+
+    # 2. logo bitmap
+    try:
+        from PIL import Image
+        from pystray import _win32 as pw
+        import pystray
+
+        px = ctypes.windll.user32.GetSystemMetrics(49)    # SM_CXSMICON
+        logo = _base_logo(px)
+        if logo is None:
+            return
+
+        class BMIH(ctypes.Structure):
+            _fields_ = [("biSize", wintypes.DWORD), ("biWidth", wintypes.LONG),
+                        ("biHeight", wintypes.LONG), ("biPlanes", wintypes.WORD),
+                        ("biBitCount", wintypes.WORD),
+                        ("biCompression", wintypes.DWORD),
+                        ("biSizeImage", wintypes.DWORD),
+                        ("biXPelsPerMeter", wintypes.LONG),
+                        ("biYPelsPerMeter", wintypes.LONG),
+                        ("biClrUsed", wintypes.DWORD),
+                        ("biClrImportant", wintypes.DWORD)]
+
+        hdr = BMIH(ctypes.sizeof(BMIH), px, -px, 1, 32, 0, 0, 0, 0, 0, 0)
+        gdi = ctypes.windll.gdi32
+        gdi.CreateDIBSection.restype = ctypes.c_void_p
+        bits = ctypes.c_void_p()
+        hbmp = gdi.CreateDIBSection(None, ctypes.byref(hdr), 0,
+                                    ctypes.byref(bits), None, 0)
+        if not hbmp:
+            return
+        r, g, b, a = logo.convert("RGBa").split()      # premultiplied alpha
+        data = Image.merge("RGBA", (b, g, r, a)).tobytes()
+        ctypes.memmove(bits, data, len(data))
+
+        original = pw.Icon._create_menu_item
+
+        def with_logo(self, descriptor, callbacks):
+            info = original(self, descriptor, callbacks)
+            if (descriptor is not pystray.Menu.SEPARATOR
+                    and descriptor.text.startswith("Debrief Uploader")):
+                info.fMask |= 0x80          # MIIM_BITMAP
+                info.hbmpItem = hbmp
+                info.fState = (info.fState & ~0x3) | 0x2   # disabled, not grayed
+            return info
+
+        pw.Icon._create_menu_item = with_logo
+    except Exception:
+        pass
+
+
+# ---------------------------------------------------------- custom menu -----
+
+def _work_area_at(x, y):
+    """Usable area (without taskbar) of the monitor at this point."""
+    import ctypes
+    from ctypes import wintypes
+    u = ctypes.windll.user32
+
+    class MI(ctypes.Structure):
+        _fields_ = [("cbSize", wintypes.DWORD), ("rcMonitor", wintypes.RECT),
+                    ("rcWork", wintypes.RECT), ("dwFlags", wintypes.DWORD)]
+
+    u.MonitorFromPoint.argtypes = [wintypes.POINT, wintypes.DWORD]
+    u.MonitorFromPoint.restype = ctypes.c_void_p
+    u.GetMonitorInfoW.argtypes = [ctypes.c_void_p, ctypes.POINTER(MI)]
+    mon = u.MonitorFromPoint(wintypes.POINT(x, y), 2)
+    mi = MI()
+    mi.cbSize = ctypes.sizeof(MI)
+    u.GetMonitorInfoW(mon, ctypes.byref(mi))
+    w = mi.rcWork
+    return w.left, w.top, w.right, w.bottom
+
+
+class _PopupHost:
+    """One hidden Tk root on one long lived thread, shared by every popup.
+
+    A new tk.Tk() per right click crashed the app on the second open: the
+    first root, its fonts and its image were still waiting for the garbage
+    collector, and when that ran on another thread Tcl aborted the whole
+    process. Here the root, the fonts and the logo image are created once and
+    never freed. Each popup is only a Toplevel that is destroyed on the same
+    thread that made it.
+    """
+
+    def __init__(self):
+        self.q = queue.Queue()
+        self.open = False
+        self.ready = False
+        threading.Thread(target=self._run, daemon=True).start()
+
+    def request(self, icon, x, y):
+        self.q.put((icon, x, y))
+
+    def p(self, n):
+        return int(round(n * self.k))
+
+    def _run(self):
+        import tkinter as tk
+        import tkinter.font as tkfont
+        try:
+            root = tk.Tk()
+            root.withdraw()
+            # Other windows must not pick this root up as the default root.
+            if tk._default_root is root:
+                tk._default_root = None
+            self.root = root
+            self.k = max(1.0, root.winfo_fpixels("1i") / 96.0)
+            self.font = tkfont.Font(root=root, family="Segoe UI", size=10)
+            self.bold = tkfont.Font(root=root, family="Segoe UI", size=10,
+                                    weight="bold")
+            self.photo = None
+            logo = _base_logo(self.p(18))
+            if logo is not None:
+                from PIL import ImageTk
+                self.photo = ImageTk.PhotoImage(logo, master=root)
+            self.ready = True
+        except Exception as e:
+            print("tray menu:", e)
+            return
+
+        def poll():
+            try:
+                while True:
+                    icon, x, y = self.q.get_nowait()
+                    if self.open:
+                        continue
+                    self.open = True
+                    try:
+                        self._show(icon, x, y)
+                    except Exception as e:
+                        print("tray menu:", e)
+                        self.open = False
+            except queue.Empty:
+                pass
+            root.after(40, poll)
+
+        poll()
+        root.mainloop()
+
+    def _show(self, icon, cx, cy):
+        import ctypes
+        import tkinter as tk
+        from ctypes import wintypes
+        import pystray
+
+        items = [None if i is pystray.Menu.SEPARATOR else i
+                 for i in icon.menu]
+        if not items:
+            self.open = False
+            return
+
+        p, font, bold, photo = self.p, self.font, self.bold, self.photo
+        top = tk.Toplevel(self.root)
+        top.withdraw()
+        top.overrideredirect(True)
+        top.attributes("-topmost", True)
+
+        BGM, HOVER, SEPC = ui.PANEL, "#1d3448", ui.LINE
+        ROW, SEP, PADX, PADY, RAD = p(34), p(9), p(18), p(6), p(6)
+        ico_w = (p(18) + p(10)) if photo else 0
+
+        def fnt(it):
+            return bold if it.default else font
+
+        width = p(220)
+        for n, it in enumerate(items):
+            if it is not None:
+                need = fnt(it).measure(it.text) + (ico_w if n == 0 else 0)
+                width = max(width, need + 2 * PADX + 2 * PADY)
+
+        rows, y = [], PADY
+        for it in items:
+            step = SEP if it is None else ROW
+            rows.append((it, y, y + step))
+            y += step
+        height = y + PADY
+
+        # above the cursor like the native menu, inside the work area
+        left, upper, right, bottom = _work_area_at(cx, cy)
+        gap = p(8)
+        x0 = max(left + gap, min(cx - width, right - width - gap))
+        y0 = max(upper + gap, min(cy - height, bottom - height - gap))
+
+        c = tk.Canvas(top, width=width, height=height, bg=BGM,
+                      highlightthickness=0, bd=0)
+        c.pack()
+
+        def rrect(a, b, e, d, rad, **kw):
+            pts = [a + rad, b, e - rad, b, e, b, e, b + rad, e, d - rad, e, d,
+                   e - rad, d, a + rad, d, a, d, a, d - rad, a, b + rad, a, b]
+            return c.create_polygon(pts, smooth=True, **kw)
+
+        for n, (it, a, b) in enumerate(rows):
+            if it is None:
+                m = (a + b) // 2
+                c.create_line(PADX, m, width - PADX, m, fill=SEPC)
+                continue
+            tx = PADX
+            if n == 0 and photo:
+                c.create_image(PADX, (a + b) // 2, image=photo, anchor="w")
+                tx += ico_w
+            c.create_text(tx, (a + b) // 2, text=it.text, anchor="w",
+                          font=fnt(it),
+                          fill=ui.INK if it.enabled else ui.MUTED)
+
+        state = {"i": None, "after": None, "done": False}
+
+        def hover(i):
+            if i == state["i"]:
+                return
+            state["i"] = i
+            c.delete("hl")
+            if i is not None:
+                _, a, b = rows[i]
+                rrect(PADY, a, width - PADY, b, RAD, fill=HOVER, outline="",
+                      tags="hl")
+                c.tag_lower("hl")
+
+        def hit(yy):
+            for i, (it, a, b) in enumerate(rows):
+                if it is not None and it.enabled and a <= yy < b:
+                    return i
+            return None
+
+        def close(*_):
+            if state["done"]:
+                return
+            state["done"] = True
+            if state["after"]:
+                try:
+                    top.after_cancel(state["after"])
+                except Exception:
+                    pass
+            try:
+                top.destroy()
+            except tk.TclError:
+                pass
+            self.open = False
+
+        def activate(i):
+            if i is None or state["done"]:
+                return
+            it = rows[i][0]
+            close()
+            threading.Thread(target=icon._handler(it), daemon=True).start()
+
+        def step_key(d):
+            order = [i for i, (it, _, _) in enumerate(rows)
+                     if it is not None and it.enabled]
+            if not order:
+                return
+            cur = state["i"]
+            nxt = (order[0] if cur not in order
+                   else order[(order.index(cur) + d) % len(order)])
+            hover(nxt)
+
+        c.bind("<Motion>", lambda e: hover(hit(e.y)))
+        c.bind("<Leave>", lambda e: hover(None))
+        c.bind("<ButtonRelease-1>", lambda e: activate(hit(e.y)))
+
+        top.geometry("%dx%d+%d+%d" % (width, height, x0, y0))
+        top.update_idletasks()
+
+        # A private user32 handle, so these argtypes never touch the ones
+        # other modules set on ctypes.windll.user32.
+        u = ctypes.WinDLL("user32")
+        u.GetAncestor.argtypes = [wintypes.HWND, wintypes.UINT]
+        u.GetAncestor.restype = wintypes.HWND
+        u.GetForegroundWindow.restype = wintypes.HWND
+        u.GetAsyncKeyState.argtypes = [ctypes.c_int]
+        u.GetAsyncKeyState.restype = ctypes.c_short
+        u.GetWindowLongW.argtypes = [wintypes.HWND, ctypes.c_int]
+        u.GetWindowLongW.restype = ctypes.c_long
+        u.SetWindowLongW.argtypes = [wintypes.HWND, ctypes.c_int,
+                                     ctypes.c_long]
+        u.SetWindowLongW.restype = ctypes.c_long
+        hwnd = u.GetAncestor(top.winfo_id(), 2)
+
+        # Never take the foreground. The taskbar (also when it hides itself)
+        # and the hidden icons flyout close as soon as they lose activation,
+        # so the popup is a no-activate tool window and the taskbar keeps
+        # the focus the right click gave it.
+        try:
+            style = u.GetWindowLongW(hwnd, -20)             # GWL_EXSTYLE
+            u.SetWindowLongW(hwnd, -20,
+                             style | 0x08000000 | 0x80)     # NOACTIVATE | TOOLWINDOW
+        except Exception:
+            pass
+
+        try:
+            from .winframe import _round_corners
+            _round_corners(top, self.p)
+        except Exception:
+            pass
+        top.deiconify()
+        top.update_idletasks()
+
+        # No focus means no key events, so Esc, Up, Down and Enter are read
+        # from the keyboard state while the popup is open. Any click outside
+        # and any change of the foreground window close it.
+        keys = {0x1B: close,                                # Escape
+                0x26: lambda: step_key(-1),                 # Up
+                0x28: lambda: step_key(1),                  # Down
+                0x0D: lambda: activate(state["i"])}         # Enter
+        prev = {k: u.GetAsyncKeyState(k) < 0 for k in keys}
+        fg0 = [None]
+
+        def inside():
+            pt = wintypes.POINT()
+            u.GetCursorPos(ctypes.byref(pt))
+            return x0 <= pt.x < x0 + width and y0 <= pt.y < y0 + height
+
+        def watch():
+            state["after"] = None
+            if state["done"]:
+                return
+            try:
+                if (any(u.GetAsyncKeyState(b) < 0 for b in (1, 2, 4))
+                        and not inside()):
+                    close()
+                    return
+                fg = u.GetForegroundWindow()
+                if fg0[0] is None:
+                    fg0[0] = fg       # whatever the right click activated
+                elif fg != fg0[0]:
+                    close()           # Alt+Tab, another window came up
+                    return
+                for k, fn in keys.items():
+                    down = u.GetAsyncKeyState(k) < 0
+                    fired = down and not prev[k]
+                    prev[k] = down
+                    if fired:
+                        fn()
+                        if state["done"]:
+                            return
+            except Exception:
+                pass
+            state["after"] = top.after(40, watch)
+
+        state["after"] = top.after(150, watch)
+
+
+_HOST = [None]
+
+
+def _install_menus(custom=None):
+    """Style / replace the tray menu, or leave pystray's own menu alone.
+
+    Both variants patch PRIVATE pystray members (Icon._on_notify,
+    Icon._create_menu_item). A pystray that renamed them must cost the user
+    the pretty menu, never the tray: any failure here falls back to the
+    native menu. Returns True when the custom popup is installed."""
+    try:
+        _style_tray_menu()
+    except Exception as e:
+        print("tray menu: native menu left unstyled (%s)" % e)
+    if not (CUSTOM_MENU if custom is None else custom):
+        return False
+    try:
+        _install_custom_menu()
+        return True
+    except Exception as e:
+        print("tray menu: using the native menu (%s)" % e)
+        return False
+
+
+def _install_custom_menu():
+    """Right click on the tray icon opens our popup instead of the native menu."""
+    if os.name != "nt":
+        return
+    import ctypes
+    from ctypes import wintypes
+    from pystray import _win32 as pw
+
+    original = pw.Icon._on_notify          # AttributeError if pystray changed
+    if not hasattr(pw.Icon, "_handler"):
+        raise AttributeError("pystray Icon has no _handler")
+    _HOST[0] = _PopupHost()
+
+    def on_notify(self, wparam, lparam):
+        if lparam == pw.win32.WM_RBUTTONUP and self._menu_handle:
+            try:
+                pt = wintypes.POINT()
+                ctypes.windll.user32.GetCursorPos(ctypes.byref(pt))
+                _HOST[0].request(self, pt.x, pt.y)
+                return
+            except Exception:
+                pass
+        return original(self, wparam, lparam)
+
+    pw.Icon._on_notify = on_notify
 
 
 class Tray:
@@ -293,6 +712,10 @@ class Tray:
             self.log.error("the tray needs pystray (pip install pystray). "
                            "Run without --tray to use the console instead.")
             return 1
+
+        # Both must run before pystray.Icon(...): pystray binds its private
+        # handlers when the icon is created.
+        _install_menus()
 
         self.icon = pystray.Icon("gd-debrief", _icon_image(self._colour()),
                                  self._title(), menu=self._build_menu())

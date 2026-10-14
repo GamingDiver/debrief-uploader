@@ -459,3 +459,36 @@ class TestTrayIcon(unittest.TestCase):
         finally:
             tray._res = real
         self.assertIsNotNone(im.getbbox(), "never a fully transparent icon")
+
+
+class TestCustomTrayMenuFallback(unittest.TestCase):
+    """The custom tray popup patches private pystray members. A pystray
+    without them must fall back to the native menu, not stop the tray."""
+
+    def test_missing_pystray_internals_fall_back_to_the_native_menu(self):
+        import types
+        saved = {k: sys.modules.get(k) for k in ("pystray", "pystray._win32")}
+        saved_name = tray.os.name
+        fake = types.ModuleType("pystray")
+        fake_win = types.ModuleType("pystray._win32")
+
+        class Icon:                     # no _on_notify, no _handler
+            pass
+
+        fake_win.Icon = Icon
+        fake._win32 = fake_win
+        sys.modules["pystray"], sys.modules["pystray._win32"] = fake, fake_win
+        tray.os.name = "nt"
+        try:
+            self.assertFalse(tray._install_menus(custom=True))
+            self.assertFalse(hasattr(Icon, "_on_notify"))
+        finally:
+            tray.os.name = saved_name
+            for k, v in saved.items():
+                if v is None:
+                    sys.modules.pop(k, None)
+                else:
+                    sys.modules[k] = v
+
+    def test_custom_menu_off_installs_nothing(self):
+        self.assertFalse(tray._install_menus(custom=False))
