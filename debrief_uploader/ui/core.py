@@ -463,16 +463,96 @@ def _text_body(r, around, margin_x=0, margin_y=0, **text_kw):
     return t
 
 
-def _text_window(title, lines, log, what):
-    def build():
+# ------------------------------------------------------- one window each ----
+# Status, Settings and the diagnosis each exist once (Greg 2026-10-13: "up to
+# three Status windows open at one time"). Opening one that is already open
+# only flags it; the window's own tick (on its own thread -- Tk calls never
+# cross threads) brings it forward. Review keeps its own copy of this rule.
+_SINGLE = {}
+_SINGLE_LOCK = threading.Lock()
+FRONT_STEP_MS = 250
+
+
+def _single(key, build, log, what):
+    """Run build(state) on a window thread, unless window `key` is already
+    open: then ask that one to come forward. Returns True when it opened."""
+    with _SINGLE_LOCK:
+        st = _SINGLE.setdefault(key, {"open": False, "front": False})
+        if st["open"]:
+            st["front"] = True
+            return False
+        st["open"], st["front"] = True, False
+
+    def run():
+        try:
+            build(st)
+        finally:
+            with _SINGLE_LOCK:
+                st["open"] = False
+
+    try:
+        _thread(run, log, what)
+    except Exception:
+        with _SINGLE_LOCK:
+            st["open"] = False
+        raise
+    return True
+
+
+def _bring_forward(r):
+    try:
+        r.deiconify()
+        r.lift()
+        r.attributes("-topmost", True)
+        r.after(300, lambda: r.winfo_exists() and r.attributes("-topmost", False))
+        r.focus_force()
+    except Exception:
+        pass
+
+
+def _front_requested(st):
+    """True once per bring-forward request (read from the window's tick)."""
+    if st.get("front"):
+        st["front"] = False
+        return True
+    return False
+
+
+def _watch_front(r, st, log, what, on_front=None):
+    """For windows with no refresh loop of their own: bring `r` forward when
+    it is opened again, then call on_front() (e.g. to refresh its text)."""
+    def tick():
+        if _front_requested(st):
+            _bring_forward(r)
+            if on_front:
+                on_front()
+    _poll(r, FRONT_STEP_MS, tick, log, what)
+
+
+def _text_window(title, lines, log, what, key=None, lines_again=None):
+    """A read-only text window. With `key` there is only ever one; opening it
+    again brings it forward and, given lines_again(), shows fresh lines."""
+    def build(st=None):
         r = _root(title, 760, 560)
         t = _text_body(r, PANEL, bg=PANEL, fg=INK, insertbackground=INK,
                        relief="flat", font=("Consolas", 9), padx=12, pady=10,
                        highlightthickness=0)
-        t.insert("1.0", "\n".join(lines))
-        t.configure(state="disabled")
+
+        def show(ls):
+            t.configure(state="normal")
+            t.delete("1.0", "end")
+            t.insert("1.0", "\n".join(ls))
+            t.configure(state="disabled")
+
+        show(lines)
+        if st is not None:
+            _watch_front(r, st, log, what,
+                         on_front=(lambda: show(lines_again())) if lines_again else None)
         r.mainloop()
-    _thread(build, log, what)
+    if key:
+        _single(key, build, log, what)
+    else:
+        _thread(build, log, what)
 
 
 def _set_size(r, w, h):

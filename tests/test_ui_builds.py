@@ -272,7 +272,7 @@ class TestWindowsBuild(unittest.TestCase):
     def test_status_opened_again_brings_the_same_window_forward(self):
         """One Status window (Greg 2026-10-13: three were open at once).
         Opening it while it is open builds nothing new; it comes forward."""
-        from debrief_uploader.ui import status as st
+        from debrief_uploader.ui import core
         roots, seen = [], {}
         real_root = self._real_root
 
@@ -283,10 +283,10 @@ class TestWindowsBuild(unittest.TestCase):
             def again():
                 self.ui.open_status(self.app)
                 self.ui.open_status(self.app)
-                seen["front_requested"] = st._STATUS["front"]
+                seen["front_requested"] = core._SINGLE["status"]["front"]
 
             def check():
-                seen["front_after"] = st._STATUS["front"]
+                seen["front_after"] = core._SINGLE["status"]["front"]
                 r.destroy()
             r.after(200, again)
             r.after(900, check)        # a few 250 ms ticks later
@@ -298,7 +298,7 @@ class TestWindowsBuild(unittest.TestCase):
         self.assertEqual(len(roots), 1)
         self.assertTrue(seen["front_requested"])
         self.assertFalse(seen["front_after"])      # the window handled it
-        self.assertFalse(st._STATUS["open"])       # closed: next click builds anew
+        self.assertFalse(core._SINGLE["status"]["open"])   # closed: next click builds anew
 
         def closing_root(title, w, h):
             r = real_root(title, w, h)
@@ -308,6 +308,42 @@ class TestWindowsBuild(unittest.TestCase):
         self.ui.core._root = closing_root
         self.ui.open_status(self.app)
         self.assertEqual(len(roots), 2)
+
+    def _opened_twice_builds_once(self, opener, key):
+        """Open `opener` again while its window is showing: no second
+        window, and the open one handles the bring-forward request."""
+        from debrief_uploader.ui import core
+        roots, seen = [], {}
+        real_root = self._real_root
+
+        def counting_root(title, w, h):
+            r = real_root(title, w, h)
+            roots.append(title)
+
+            def again():
+                opener(self.app)
+                seen["front_requested"] = core._SINGLE[key]["front"]
+
+            def check():
+                seen["front_after"] = core._SINGLE[key]["front"]
+                r.destroy()
+            r.after(200, again)
+            r.after(900, check)
+            return r
+
+        self.ui.core._root = counting_root
+        opener(self.app)
+        self.assertEqual(self.errors, [])
+        self.assertEqual(len(roots), 1)
+        self.assertTrue(seen["front_requested"])
+        self.assertFalse(seen["front_after"])
+        self.assertFalse(core._SINGLE[key]["open"])
+
+    def test_settings_opened_again_brings_the_same_window_forward(self):
+        self._opened_twice_builds_once(self.ui.open_settings, "settings")
+
+    def test_diagnosis_opened_again_brings_the_same_window_forward(self):
+        self._opened_twice_builds_once(self.ui.open_doctor, "doctor")
 
     def _click_provider(self, provider, outcome):
         """Open the sign-in window, press 'Sign in with <provider>', and report

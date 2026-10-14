@@ -1,6 +1,5 @@
 """The Status and "Why isn't it uploading?" windows."""
 
-import threading
 
 from .. import config
 from . import core
@@ -11,14 +10,6 @@ from .core import (
 
 
 # ---------------------------------------------------------------- status ----
-
-# One Status window (Greg 2026-10-13: "up to three Status windows open at one
-# time"). It already keeps itself current, so opening it again only brings the
-# open one forward -- the same rule as Review. The flag is read by the
-# window's own tick on its own thread: Tk calls never cross threads.
-_STATUS = {"open": False, "front": False}
-_STATUS_LOCK = threading.Lock()
-
 
 def open_status(app):
     """What it has seen, and -- first -- what is ready for you to look at.
@@ -33,15 +24,9 @@ def open_status(app):
     upload or failure shows up without reopening the window.
     """
     REFRESH_MS = 2000
-    STEP_MS = 250       # how fast a second "Status..." click brings it forward
+    STEP_MS = core.FRONT_STEP_MS   # how fast a second click brings it forward
 
-    with _STATUS_LOCK:
-        if _STATUS["open"]:
-            _STATUS["front"] = True
-            return
-        _STATUS["open"], _STATUS["front"] = True, False
-
-    def build():
+    def build(st):
         import tkinter as tk
         import webbrowser
 
@@ -128,23 +113,11 @@ def open_status(app):
                 last[0] = sig
                 render(c, rows)
 
-        def front():
-            try:
-                r.deiconify()
-                r.lift()
-                r.attributes("-topmost", True)
-                r.after(300, lambda: r.winfo_exists()
-                        and r.attributes("-topmost", False))
-                r.focus_force()
-            except Exception:
-                pass
-
         waited = [0]
 
         def tick():
-            if _STATUS["front"]:
-                _STATUS["front"] = False
-                front()
+            if core._front_requested(st):
+                core._bring_forward(r)
             waited[0] += STEP_MS
             if waited[0] >= REFRESH_MS:
                 waited[0] = 0
@@ -157,24 +130,13 @@ def open_status(app):
         _poll(r, STEP_MS, tick, app.log, "status window")
         r.mainloop()
 
-    def run():
-        try:
-            build()
-        finally:
-            with _STATUS_LOCK:
-                _STATUS["open"] = False
-
-    try:
-        core._thread(run, app.log, "the status window")
-    except Exception:
-        with _STATUS_LOCK:
-            _STATUS["open"] = False
-        raise
+    core._single("status", build, app.log, "the status window")
 
 
 def open_doctor(app):
     _text_window("Debrief Uploader - diagnosis", app.eng.diagnose(), app.log,
-                 "the diagnosis window")
+                 "the diagnosis window", key="doctor",
+                 lines_again=app.eng.diagnose)
 
 
 def _version():

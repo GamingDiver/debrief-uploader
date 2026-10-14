@@ -15,8 +15,12 @@ from .signin import open_sign_in
 # -------------------------------------------------------------- settings ----
 
 def open_settings(app):
-    core._thread(lambda: _SettingsWindow(app).run(), app.log,
-                 "the settings window")
+    """One Settings window: opening it again brings the open one forward."""
+    def build(st):
+        w = _SettingsWindow(app)
+        core._watch_front(w.r, st, app.log, "settings window")
+        w.run()
+    core._single("settings", build, app.log, "the settings window")
 
 
 class _SettingsWindow:
