@@ -269,6 +269,46 @@ class TestWindowsBuild(unittest.TestCase):
         self.assertEqual(self.errors, [])
         self.assertIn("def456", seen["text"])
 
+    def test_status_opened_again_brings_the_same_window_forward(self):
+        """One Status window (Greg 2026-10-13: three were open at once).
+        Opening it while it is open builds nothing new; it comes forward."""
+        from debrief_uploader.ui import status as st
+        roots, seen = [], {}
+        real_root = self._real_root
+
+        def counting_root(title, w, h):
+            r = real_root(title, w, h)
+            roots.append(title)
+
+            def again():
+                self.ui.open_status(self.app)
+                self.ui.open_status(self.app)
+                seen["front_requested"] = st._STATUS["front"]
+
+            def check():
+                seen["front_after"] = st._STATUS["front"]
+                r.destroy()
+            r.after(200, again)
+            r.after(900, check)        # a few 250 ms ticks later
+            return r
+
+        self.ui.core._root = counting_root
+        self.ui.open_status(self.app)
+        self.assertEqual(self.errors, [])
+        self.assertEqual(len(roots), 1)
+        self.assertTrue(seen["front_requested"])
+        self.assertFalse(seen["front_after"])      # the window handled it
+        self.assertFalse(st._STATUS["open"])       # closed: next click builds anew
+
+        def closing_root(title, w, h):
+            r = real_root(title, w, h)
+            roots.append(title)
+            r.after(60, r.destroy)
+            return r
+        self.ui.core._root = closing_root
+        self.ui.open_status(self.app)
+        self.assertEqual(len(roots), 2)
+
     def _click_provider(self, provider, outcome):
         """Open the sign-in window, press 'Sign in with <provider>', and report
         what the window did. oauth.sign_in_browser is faked: no browser."""
