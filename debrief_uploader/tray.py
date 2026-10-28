@@ -533,10 +533,17 @@ def process_memory_mb():
                             ("PrivateUsage", ctypes.c_size_t)]
             pmc = PMC()
             pmc.cb = ctypes.sizeof(PMC)
-            k = ctypes.windll.kernel32
+            k = ctypes.WinDLL("kernel32")
             k.GetCurrentProcess.restype = wintypes.HANDLE
-            ok = ctypes.windll.psapi.GetProcessMemoryInfo(
-                k.GetCurrentProcess(), ctypes.byref(pmc), pmc.cb)
+            k.GetCurrentProcess.argtypes = []
+            fn = getattr(k, "K32GetProcessMemoryInfo", None) \
+                or ctypes.WinDLL("psapi").GetProcessMemoryInfo
+            # Declared, not guessed: the process handle is a 64-bit pseudo
+            # handle (-1), which an undeclared call passes as a C int and
+            # overflows -- the first build of this returned nothing on Windows.
+            fn.argtypes = [wintypes.HANDLE, ctypes.POINTER(PMC), wintypes.DWORD]
+            fn.restype = wintypes.BOOL
+            ok = fn(k.GetCurrentProcess(), ctypes.byref(pmc), pmc.cb)
             return pmc.PrivateUsage / 1048576.0 if ok else None
         import resource
         r = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss

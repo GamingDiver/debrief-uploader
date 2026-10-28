@@ -403,6 +403,11 @@ class TestMenuIsNotStale(unittest.TestCase):
         self.assertEqual(self.tray.icon.updates, n + 1)
         self.assertIn("Review (1)", [str(getattr(m, "text", m)) for m in self.tray.icon.menu.items])
 
+    def test_memory_reading_works_on_this_platform(self):
+        mb = tray.process_memory_mb()
+        self.assertIsNotNone(mb, "process_memory_mb() returned nothing")
+        self.assertGreater(mb, 1)
+
     def test_memory_is_logged_with_a_number(self):
         lines = []
         self.tray.log.info = lambda m: lines.append(m)
