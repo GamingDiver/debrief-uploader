@@ -226,6 +226,48 @@ class TestUploadSequence(EngineCase):
         self.assertEqual(self.client.calls.count("rpc:create_replay"), 1)
 
 
+class TestClockSetBack(EngineCase):
+    """Greg 2026-10-28: the PC clock was set four days ahead to unlock an
+    in-game event and later corrected. Everything stamped in between sat in
+    the future: the upload pacer's 2 s gap became four days and the
+    scorecards waited days to be decided, so nothing uploaded."""
+
+    FAST = 4 * 86400
+
+    def _ticks(self, now, n=6):
+        for i in range(n):
+            self.eng.tick(now=now + i * 30)
+
+    def test_battles_from_a_fast_clock_upload_after_it_is_set_back(self):
+        real = time.time()
+        fast = real + self.FAST
+        self.battle("A", fast - 400)          # played while the clock ran fast
+        self._ticks(fast - 200)
+        self.assertEqual(self.store.replays()[0]["state"], matcher.UPLOADED)
+        self.battle("B", fast - 100)          # also fast-stamped...
+        self._ticks(real)                     # ...but seen after the fix
+        states = sorted(r["state"] for r in self.store.replays())
+        self.assertEqual(states, [matcher.UPLOADED, matcher.UPLOADED], states)
+        b = [r for r in self.store.replays() if "B" in r["filename"]][0]
+        self.assertEqual(len(self.store.shots_for(b["md5"])), 2,
+                         "the scorecards stay with their battle")
+
+    def test_an_install_already_holding_future_times_recovers(self):
+        # the state on Greg's PC when 1.6.2 starts: no record of the jump,
+        # just rows stamped days ahead and a pacer that last ran "then"
+        real = time.time()
+        self.battle("C", real + self.FAST - 100)
+        self.eng.pacer.last = real + self.FAST
+        self._ticks(real)
+        self.assertEqual(self.store.replays()[0]["state"], matcher.UPLOADED)
+
+    def test_pacer_never_waits_for_a_time_in_the_future(self):
+        now = time.time()
+        self.eng.pacer.last = now + self.FAST
+        self.eng.pacer.recent = [now + self.FAST]
+        self.assertEqual(self.eng.pacer.wait_needed(now + 5), 0.0)
+
+
 class TestEngineMatching(EngineCase):
 
     def test_training_room_uploads_with_no_screenshots(self):

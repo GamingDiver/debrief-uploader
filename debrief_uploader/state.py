@@ -195,6 +195,28 @@ class Store:
                     (older_than,))
 
     # ---- kv ---------------------------------------------------------------
+    def shift_times_after(self, threshold, delta):
+        """Move every stored timestamp later than `threshold` back by `delta`
+        seconds: the files a clock running fast stamped "in the future".
+        Shots and replays from that stretch were all stamped by the same fast
+        clock, so shifting them together keeps them paired with each other.
+        Returns how many rows moved."""
+        n = 0
+        with self._lock:
+            for sql in ("UPDATE shots SET t = t - ? WHERE t > ?",
+                        "UPDATE shots SET seen_at = seen_at - ? WHERE seen_at > ?",
+                        "UPDATE replays SET t_close = t_close - ? WHERE t_close > ?",
+                        "UPDATE replays SET next_try = next_try - ? WHERE next_try > ?"):
+                n += self.db.execute(sql, (delta, threshold)).rowcount
+            self.db.commit()
+        return n
+
+    def latest_time(self):
+        """The latest file timestamp the store holds (shots or replays)."""
+        row = self._one("SELECT MAX(m) AS m FROM (SELECT MAX(t) AS m FROM shots "
+                        "UNION ALL SELECT MAX(t_close) FROM replays)")
+        return row["m"] if row and row["m"] is not None else None
+
     def get(self, k, default=None):
         r = self._one("SELECT v FROM kv WHERE k=?", (k,))
         return r["v"] if r else default

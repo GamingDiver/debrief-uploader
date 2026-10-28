@@ -654,8 +654,45 @@ class Engine:
         self.blocked = None
 
     # ---- one pass ---------------------------------------------------------
+    CLOCK_SLACK = 600
+
+    def _fix_clock(self, now):
+        """Undo a system clock that ran fast and was then set back.
+
+        Greg 2026-10-28: the clock was set four days ahead to unlock an
+        in-game event, then corrected. Everything stamped in between sat "in
+        the future": screenshots waited days to be decided and the upload
+        pacer's gap ran to days, so nothing uploaded. Timestamps later than
+        now are shifted back together (by the jump when it is seen happen,
+        otherwise just enough to put the newest a minute in the past), which
+        keeps a battle and its scorecards paired with each other."""
+        last = self.store.get("last_now")
+        try:
+            last = float(last) if last is not None else None
+        except (TypeError, ValueError):
+            last = None
+        delta = None
+        if last is not None and now < last - self.CLOCK_SLACK:
+            delta = last - now
+        else:
+            newest = self.store.latest_time()
+            if newest is not None and newest > now + self.CLOCK_SLACK:
+                delta = newest - now + 60
+        if delta:
+            n = self.store.shift_times_after(now, delta)
+            self.pacer.last = min(self.pacer.last, now)
+            self.log.warn("the system clock moved back by about %.1f h; moved %d "
+                          "timestamp(s) from the fast stretch back with it"
+                          % (delta / 3600.0, n))
+        if delta or last is None or now - last >= 30:
+            self.store.set("last_now", now)
+
     def tick(self, now=None):
         now = now if now is not None else time.time()
+        try:
+            self._fix_clock(now)
+        except Exception as e:           # never let this stop the uploads
+            self.log.error("clock check failed: %s" % e)
         if not self.s.get("watching_confirmed"):
             # First run: nothing is read, hashed, copied or sent until the
             # user has seen the folder lists (and excluded what they need to).

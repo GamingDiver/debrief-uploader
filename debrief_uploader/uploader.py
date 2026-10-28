@@ -38,7 +38,10 @@ class Pacer:
     def wait_needed(self, now=None):
         """Seconds to wait before the next upload may start. 0 = go."""
         now = now if now is not None else time.time()
-        self.recent = [t for t in self.recent if now - t < 3600]
+        # A clock moved back (set forward to unlock something, then fixed)
+        # leaves "last upload" in the future, and the gap below became days.
+        self.last = min(self.last, now)
+        self.recent = [min(t, now) for t in self.recent if now - t < 3600]
         gap = self.min_gap - (now - self.last)
         if self.per_hour and len(self.recent) >= self.per_hour:
             gap = max(gap, 3600 - (now - self.recent[0]))
