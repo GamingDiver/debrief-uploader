@@ -109,6 +109,74 @@ class TestStorageReplace(unittest.TestCase):
         self.assertFalse(cm.exception.permission)
 
 
+class TestTokenAfterClockChange(unittest.TestCase):
+    """Greg 2026-10-28: a token refreshed while the PC clock ran four days
+    fast kept a local expiry four days out after the clock was corrected.
+    The app thought it valid, never refreshed, and every request came back
+    401 (REST) / 400 "jwt expired" (Storage) for hours."""
+
+    def setUp(self):
+        self._real = (api._request, api.load_session, api.save_session)
+        api.save_session = lambda s: None
+        api.load_session = lambda: None
+
+    def tearDown(self):
+        api._request, api.load_session, api.save_session = self._real
+
+    def _refresh_reply(self):
+        return 200, {}, json.dumps({"access_token": "fresh", "refresh_token": "r2",
+                                    "expires_in": 3600, "user": {"id": "uid"}}).encode()
+
+    def test_expiry_beyond_one_lifetime_is_not_trusted(self):
+        s = Session(access="a", refresh="r", expires_at=time.time() + 4 * 86400)
+        self.assertFalse(s.valid)
+        self.assertTrue(Session(access="a", refresh="r", expires_at=time.time() + 3000).valid)
+
+    def test_stale_expiry_refreshes_before_the_request(self):
+        calls = []
+
+        def http(method, url, data=None, headers=None, timeout=60):
+            calls.append((url, (headers or {}).get("Authorization")))
+            if "token?grant_type=refresh_token" in url:
+                return self._refresh_reply()
+            return 200, {}, b"[]"
+        api._request = http
+        c = Client(Session(access="old", refresh="r", expires_at=time.time() + 4 * 86400))
+        c.find_existing("me", "2026-10-28T00:00:00Z")
+        self.assertIn("grant_type=refresh_token", calls[0][0])
+        self.assertEqual(calls[1][1], "Bearer fresh")
+
+    def test_a_rejected_token_refreshes_and_retries_once(self):
+        state = {"n": 0}
+
+        def http(method, url, data=None, headers=None, timeout=60):
+            if "token?grant_type=refresh_token" in url:
+                return self._refresh_reply()
+            state["n"] += 1
+            if (headers or {}).get("Authorization") == "Bearer old":
+                return 400, {}, b'{"statusCode":"403","error":"Unauthorized","message":"jwt expired"}'
+            return 200, {}, b"{}"
+        api._request = http
+        c = Client(Session(access="old", refresh="r", expires_at=time.time() + 3000))
+        self.assertTrue(c.storage_upload("replays", "uid/x.wowsreplay", b"x", "application/octet-stream"))
+        self.assertEqual(state["n"], 2)
+        self.assertEqual(c.session.access, "fresh")
+
+    def test_a_permission_refusal_is_not_mistaken_for_a_dead_token(self):
+        self.assertFalse(api._token_rejected(403, RLS))
+        self.assertTrue(api._token_rejected(401, b"{}"))
+
+    def test_another_process_rotated_the_refresh_token(self):
+        # doctor/CLI refreshed first: our refresh token is spent. Use theirs
+        # instead of failing (which would sign this app out).
+        newer = Session(access="theirs", refresh="r-new", expires_at=time.time() + 3000)
+        api.load_session = lambda: newer
+        api._request = lambda *a, **k: (_ for _ in ()).throw(AssertionError("no network"))
+        c = Client(Session(access="old", refresh="r-old", expires_at=0))
+        c.ensure_auth()
+        self.assertEqual(c.session.access, "theirs")
+
+
 class TestOverwriteDetection(unittest.TestCase):
 
     def test_rls_message_is_an_overwrite_refusal(self):

@@ -89,6 +89,16 @@ def _is_overwrite_refusal(status, body):
             or "duplicate" in text or status == 409)
 
 
+def _token_rejected(status, body):
+    """The server refused the access token itself (not a permission rule)."""
+    if status == 401:
+        return True
+    if status in (400, 403):
+        text = (body or b"").decode("utf-8", "replace").lower()
+        return "jwt" in text or ("token" in text and ("expired" in text or "invalid" in text))
+    return False
+
+
 def _raise_for(status, body):
     """Turn a Supabase/PostgREST error body into an ApiError."""
     j = _json(body) or {}
@@ -119,16 +129,24 @@ class Session:
     """Access/refresh tokens, persisted encrypted (DPAPI on Windows)."""
 
     def __init__(self, access=None, refresh=None, expires_at=0, user_id=None,
-                 email=None):
+                 email=None, lifetime=3600):
         self.access = access
         self.refresh = refresh
         self.expires_at = expires_at or 0
         self.user_id = user_id
         self.email = email
+        self.lifetime = lifetime or 3600
 
     @property
     def valid(self):
-        return bool(self.access) and time.time() < self.expires_at - 60
+        """Usable without a refresh. expires_at is LOCAL clock + the token's
+        lifetime, so a token refreshed while the clock ran fast looks valid
+        for days after the clock is set back, and every request fails 401
+        (Greg 2026-10-28, four days ahead). An expiry further out than one
+        lifetime can only mean that: treat it as expired and refresh."""
+        now = time.time()
+        return (bool(self.access) and now < self.expires_at - 60
+                and self.expires_at - now <= self.lifetime + 300)
 
     @property
     def signed_in(self):
@@ -137,12 +155,12 @@ class Session:
     def to_dict(self):
         return {"access": self.access, "refresh": self.refresh,
                 "expires_at": self.expires_at, "user_id": self.user_id,
-                "email": self.email}
+                "email": self.email, "lifetime": self.lifetime}
 
     @classmethod
     def from_dict(cls, d):
         return cls(**{k: d.get(k) for k in
-                      ("access", "refresh", "expires_at", "user_id", "email")})
+                      ("access", "refresh", "expires_at", "user_id", "email", "lifetime")})
 
 
 def _token_path():
@@ -251,6 +269,17 @@ class Client:
         return self.session
 
     def refresh(self):
+        # Another process (the `doctor`/CLI commands, a second sign-in) may
+        # have refreshed already. Refresh tokens rotate, so ours is spent:
+        # using it would fail and sign this app out. Take the newer one.
+        try:
+            disk = load_session()
+        except Exception:
+            disk = None
+        if disk and disk.refresh and disk.refresh != self.session.refresh:
+            self.session = disk
+            if disk.valid:
+                return self.session
         if not self.session.refresh:
             raise ApiError("not_authenticated", USER_MESSAGES["not_authenticated"],
                            terminal=True)
@@ -287,11 +316,25 @@ class Client:
         if not j:
             raise ApiError("auth", "no session returned")
         u = j.get("user") or {}
+        life = int(j.get("expires_in") or 3600)
         self.session = Session(
             access=j.get("access_token"), refresh=j.get("refresh_token"),
-            expires_at=time.time() + int(j.get("expires_in") or 3600),
+            expires_at=time.time() + life, lifetime=life,
             user_id=u.get("id"), email=u.get("email"))
         save_session(self.session)
+
+    def _authed(self, method, url, data=None, extra=None):
+        """A signed-in request. When the server rejects the token itself
+        (401, or Storage's 400/403 "jwt expired"/"invalid JWT"), refresh once
+        and retry: the local expiry can be wrong (clock changes, another
+        process rotated the token) and the server is the authority."""
+        self.ensure_auth()
+        st, hd, b = _request(method, url, data, self._h(extra))
+        if _token_rejected(st, b) and self.session.refresh:
+            self.session.expires_at = 0
+            self.refresh()
+            st, hd, b = _request(method, url, data, self._h(extra))
+        return st, hd, b
 
     # ---- edge function ----------------------------------------------------
     def replay_meta(self, raw):
@@ -300,9 +343,8 @@ class Client:
         This app never holds that key -- shipping a binary with it would
         publish it.
         """
-        self.ensure_auth()
-        st, _, b = _request("POST", self.url + "/functions/v1/replay-meta", raw,
-                            self._h({"Content-Type": "application/octet-stream"}))
+        st, _, b = self._authed("POST", self.url + "/functions/v1/replay-meta", raw,
+                                {"Content-Type": "application/octet-stream"})
         if st >= 400:
             _raise_for(st, b)
         j = _json(b) or {}
@@ -314,10 +356,9 @@ class Client:
 
     # ---- rest -------------------------------------------------------------
     def rpc(self, fn, params=None):
-        self.ensure_auth()
         body = json.dumps(params or {}).encode()
-        st, _, b = _request("POST", self.url + "/rest/v1/rpc/" + fn, body,
-                            self._h({"Content-Type": "application/json"}))
+        st, _, b = self._authed("POST", self.url + "/rest/v1/rpc/" + fn, body,
+                                {"Content-Type": "application/json"})
         if st >= 400:
             _raise_for(st, b)
         return _json(b)
@@ -329,7 +370,6 @@ class Client:
         """
         if not player_name or not played_at:
             return None
-        self.ensure_auth()
         q = urllib.parse.urlencode({
             "select": "id,short_code,status",
             "player_name": "eq." + player_name,
@@ -338,7 +378,7 @@ class Client:
             "order": "created_at.asc",
             "limit": "1",
         })
-        st, _, b = _request("GET", self.url + "/rest/v1/replays?" + q, None, self._h())
+        st, _, b = self._authed("GET", self.url + "/rest/v1/replays?" + q)
         if st >= 400:
             _raise_for(st, b)
         rows = _json(b) or []
@@ -346,10 +386,9 @@ class Client:
 
     # ---- storage ----------------------------------------------------------
     def storage_delete(self, bucket, path):
-        self.ensure_auth()
         url = "%s/storage/v1/object/%s/%s" % (
             self.url, bucket, urllib.parse.quote(path))
-        st, _, b = _request("DELETE", url, None, self._h())
+        st, _, b = self._authed("DELETE", url)
         return st < 400
 
     def storage_upload(self, bucket, path, data, content_type, upsert=False):
@@ -364,17 +403,16 @@ class Client:
         policies already allow: delete, then insert. Same end state, no server
         change, and it degrades to a plain error if the delete is refused too.
         """
-        self.ensure_auth()
         url = "%s/storage/v1/object/%s/%s" % (
             self.url, bucket, urllib.parse.quote(path))
-        h = self._h({"Content-Type": content_type,
-                     "x-upsert": "true" if upsert else "false",
-                     "Cache-Control": "3600"})
-        st, _, b = _request("POST", url, data, h)
+        extra = {"Content-Type": content_type,
+                 "x-upsert": "true" if upsert else "false",
+                 "Cache-Control": "3600"}
+        st, _, b = self._authed("POST", url, data, extra)
 
         if upsert and _is_overwrite_refusal(st, b):
             self.storage_delete(bucket, path)
-            st, _, b = _request("POST", url, data, h)
+            st, _, b = self._authed("POST", url, data, extra)
 
         if st == 409:
             raise ApiError("conflict", "that path already exists", st)

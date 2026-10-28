@@ -679,6 +679,11 @@ class Engine:
             if newest is not None and newest > now + self.CLOCK_SLACK:
                 delta = newest - now + 60
         if delta:
+            # the access token's expiry was stamped on the fast clock too
+            try:
+                self.client.session.expires_at = 0
+            except AttributeError:
+                pass
             n = self.store.shift_times_after(now, delta)
             self.pacer.last = min(self.pacer.last, now)
             self.log.warn("the system clock moved back by about %.1f h; moved %d "
