@@ -388,6 +388,30 @@ class TestMenuIsNotStale(unittest.TestCase):
         self.assertIn("check your folders", labels[0])
         self.assertIn("Check folders and start...", labels)
 
+    def test_an_unchanged_tray_is_left_alone(self):
+        # Every poll used to rebuild the icon image and the native menu, 43k
+        # times a day, and an install reached 16 GB (2026-10-28).
+        self.tray._refresh()
+        n, icon = self.tray.icon.updates, self.tray.icon.icon
+        for _ in range(50):
+            self.tray._refresh()
+        self.assertEqual(self.tray.icon.updates, n)
+        self.assertIs(self.tray.icon.icon, icon)
+        # ...but a real change still reaches the tray
+        self.store.add_replay(md5="h9", state="held", t_close=1.0)
+        self.tray._refresh()
+        self.assertEqual(self.tray.icon.updates, n + 1)
+        self.assertIn("Review (1)", [str(getattr(m, "text", m)) for m in self.tray.icon.menu.items])
+
+    def test_memory_is_logged_with_a_number(self):
+        lines = []
+        self.tray.log.info = lambda m: lines.append(m)
+        self.tray.log.error = lambda m: lines.append(m)
+        self.tray._log_memory(now=10_000)
+        self.tray._log_memory(now=10_001)            # not again within 5 min
+        self.assertEqual(len(lines), 1)
+        self.assertRegex(lines[0], r"^memory: \d+ MB$")
+
     def test_counts_track_the_store(self):
         self.assertIn("Review (0)", self._labels())
         for i in range(3):

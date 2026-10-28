@@ -511,6 +511,40 @@ def _install_custom_menu():
     pw.Icon._on_notify = on_notify
 
 
+def process_memory_mb():
+    """Private memory of this process in MB (Windows: what Task Manager's
+    "Commit size" shows), or peak resident size elsewhere. None if unknown."""
+    try:
+        if os.name == "nt":
+            import ctypes
+            from ctypes import wintypes
+
+            class PMC(ctypes.Structure):
+                _fields_ = [("cb", wintypes.DWORD),
+                            ("PageFaultCount", wintypes.DWORD),
+                            ("PeakWorkingSetSize", ctypes.c_size_t),
+                            ("WorkingSetSize", ctypes.c_size_t),
+                            ("QuotaPeakPagedPoolUsage", ctypes.c_size_t),
+                            ("QuotaPagedPoolUsage", ctypes.c_size_t),
+                            ("QuotaPeakNonPagedPoolUsage", ctypes.c_size_t),
+                            ("QuotaNonPagedPoolUsage", ctypes.c_size_t),
+                            ("PagefileUsage", ctypes.c_size_t),
+                            ("PeakPagefileUsage", ctypes.c_size_t),
+                            ("PrivateUsage", ctypes.c_size_t)]
+            pmc = PMC()
+            pmc.cb = ctypes.sizeof(PMC)
+            k = ctypes.windll.kernel32
+            k.GetCurrentProcess.restype = wintypes.HANDLE
+            ok = ctypes.windll.psapi.GetProcessMemoryInfo(
+                k.GetCurrentProcess(), ctypes.byref(pmc), pmc.cb)
+            return pmc.PrivateUsage / 1048576.0 if ok else None
+        import resource
+        r = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+        return r / (1048576.0 if sys.platform == "darwin" else 1024.0)
+    except Exception:
+        return None
+
+
 class Tray:
     def __init__(self, settings, store, client, log):
         self.s = settings
@@ -521,6 +555,9 @@ class Tray:
         self.paused = False
         self.icon = None
         self._stop = threading.Event()
+        self._shown = None           # what the tray last displayed
+        self._icons = {}             # colour -> icon image, built once each
+        self._mem_beat = 0.0
 
     # ---- counts used by the menu -----------------------------------------
     def _counts(self):
@@ -569,10 +606,27 @@ class Tray:
         """
         if not self.icon:
             return
-        self.icon.icon = _icon_image(self._colour())
-        self.icon.title = self._title()
-        self.icon.menu = self._build_menu()
+        # Only touch the tray when what it shows changed. This ran every poll
+        # (2 s): a new icon image, a new ICO handle and a rebuilt native menu
+        # each time, all day. A Windows install reached 16 GB and stopped
+        # responding (2026-10-28); whatever the exact leak, churning native
+        # handles 43,000 times a day for an unchanged icon is the place it
+        # lives, and none of it is needed.
+        colour, title = self._colour(), self._title()
+        menu = self._build_menu()
+        sig = (colour, title, tuple(
+            (str(getattr(i, "text", i)), bool(getattr(i, "enabled", True)))
+            for i in getattr(menu, "items", ())))
+        if sig == self._shown:
+            return
+        if colour != (self._shown or (None,))[0]:
+            if colour not in self._icons:
+                self._icons[colour] = _icon_image(colour)
+            self.icon.icon = self._icons[colour]
+        self.icon.title = title
+        self.icon.menu = menu
         self.icon.update_menu()
+        self._shown = sig
 
     # ---- loop -------------------------------------------------------------
     def _loop(self):
@@ -593,7 +647,23 @@ class Tray:
                 self._refresh()
             except Exception as e:
                 self.log.error("could not update the tray icon: %s" % e)
+            self._log_memory()
             self._stop.wait(self.s["poll_interval"])
+
+    MEM_EVERY = 300
+
+    def _log_memory(self, now=None):
+        """The process's memory every few minutes, so a slow leak shows up in
+        the log with a time on it instead of as a frozen app."""
+        now = now if now is not None else time.time()
+        if now - self._mem_beat < self.MEM_EVERY:
+            return
+        self._mem_beat = now
+        mb = process_memory_mb()
+        if mb is not None:
+            (self.log.error if mb > 1024 else self.log.info)(
+                "memory: %.0f MB" % mb)
+
 
     # ---- menu actions -----------------------------------------------------
     def on_review(self, *_):
