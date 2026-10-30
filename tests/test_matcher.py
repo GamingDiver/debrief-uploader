@@ -357,3 +357,37 @@ class TestOlderBattleMustBePlausible(unittest.TestCase):
         d = match_cluster(one_cluster([46, 46.1]), rs, cfg())
         self.assertEqual(d.kind, AUTO)
         self.assertEqual(d.replay.key, "C")
+
+
+class BattleGroupTest(unittest.TestCase):
+    """Bot rooms on any map count as training rooms (no scorecards to wait for)."""
+
+    def meta(self, group, names):
+        return {"matchGroup": group,
+                "vehicles": [{"name": n, "relation": 2 if i else 0} for i, n in enumerate(names)]}
+
+    def test_ocean_room(self):
+        from debrief_uploader.matcher import battle_group, TRAINING
+        self.assertEqual(battle_group(self.meta("training_room", ["me", "friend"])), TRAINING)
+
+    def test_bot_room_on_a_pvp_map(self):
+        from debrief_uploader.matcher import battle_group, TRAINING
+        self.assertEqual(battle_group(self.meta("pvp", ["me", ":Hipper:", ":Scheer:"])), TRAINING)
+
+    def test_real_pvp(self):
+        from debrief_uploader.matcher import battle_group
+        self.assertEqual(battle_group(self.meta("PvP", ["me"] + ["p%d" % i for i in range(17)])), "pvp")
+
+    def test_human_only_room_still_reads_as_pvp(self):
+        # indistinguishable from PvP in the header: keeps waiting for scorecards
+        from debrief_uploader.matcher import battle_group
+        self.assertEqual(battle_group(self.meta("pvp", ["me", "friend"])), "pvp")
+
+    def test_coop_bots_stay_coop(self):
+        from debrief_uploader.matcher import battle_group
+        self.assertEqual(battle_group(self.meta("cooperative", ["me", ":Hipper:"])), "cooperative")
+
+    def test_no_vehicles(self):
+        from debrief_uploader.matcher import battle_group
+        self.assertEqual(battle_group({"matchGroup": "pvp"}), "pvp")
+        self.assertEqual(battle_group({}), "")

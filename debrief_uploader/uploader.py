@@ -99,9 +99,14 @@ def upload(client, store, rec, log, settings):
         meta = read_meta(client, staged)
         played_at = api.iso_utc(meta.get("dateTime"))
         player = meta.get("playerName")
-        p_meta = {"map": meta.get("mapName"), "mode": meta.get("matchGroup"),
+        p_meta = {"map": meta.get("mapName"), "mode": matcher.battle_group(meta),
                   "player_name": player, "player_ship": meta.get("playerVehicle"),
                   "duration_s": meta.get("duration"), "played_at": played_at}
+
+    # A training room never shows a scorecard; say so, so the row is not
+    # read as a real battle whose scorecards went missing.
+    if (p_meta.get("mode") or "").lower() == matcher.TRAINING:
+        p_meta["no_scorecard_reason"] = "training_room"
 
     shots = [s for s in store.shots_for(md5)]
 

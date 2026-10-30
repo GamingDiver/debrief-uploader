@@ -17,6 +17,7 @@ Two rules, measured on a real archive of ~500 battles, drive everything here:
    any window wide enough to cover a delayed results screen (~25 min) spans two
    or three replays.
 """
+import re
 from dataclasses import dataclass, field
 from typing import List, Optional
 
@@ -41,6 +42,23 @@ PAIRABLE = (AWAITING_SHOTS,)
 REVIEWABLE = (HELD, AWAITING_SHOTS)
 
 TRAINING = "training_room"
+
+# An AI pilot's name is colon-wrapped (":Hipper:"). Real PvP never seats an
+# AI, so a 'pvp' battle with one is a training room on a map other than Ocean
+# (only Ocean is stamped 'training_room'). Checked over ~1,100 real PvP
+# battles: none has one. A room with only humans in it still reads exactly
+# like PvP and keeps waiting for scorecards. The website applies the same
+# rule (js/replay-upload.js isTrainingRoom).
+_AI_PILOT = re.compile(r"^:[^:]+:$")
+
+
+def battle_group(meta):
+    """The battle's match group from replay-meta, with bot rooms as TRAINING."""
+    group = (meta.get("matchGroup") or "").lower()
+    if group == "pvp" and any(_AI_PILOT.match(str((v or {}).get("name") or ""))
+                              for v in meta.get("vehicles") or []):
+        return TRAINING
+    return group
 
 
 @dataclass

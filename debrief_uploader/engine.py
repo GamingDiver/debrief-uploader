@@ -300,7 +300,7 @@ class Engine:
             hdr_epoch = None
             if hdr:
                 hdr_epoch = time.mktime(time.strptime(hdr, "%Y-%m-%dT%H:%M:%SZ"))
-            group = (meta.get("matchGroup") or "").lower()
+            group = matcher.battle_group(meta)
             training = group == matcher.TRAINING
             self.store.update_replay(
                 r["md5"], header_dt=hdr_epoch, match_group=group,

@@ -80,7 +80,8 @@ class FakeClient:
             self.created_visibility = (params or {}).get("p_visibility")
             self._n += 1
             rid = "rid-%d" % self._n
-            self.rows[rid] = {"short_code": "code%d" % self._n, "shots": []}
+            self.rows[rid] = {"short_code": "code%d" % self._n, "shots": [],
+                              "meta": (params or {}).get("p_meta") or {}}
             return {"id": rid, "short_code": "code%d" % self._n,
                     "visibility": "public"}
         return True
@@ -278,6 +279,20 @@ class TestEngineMatching(EngineCase):
         row = self.store.replays()[0]
         self.assertEqual(row["state"], matcher.UPLOADED)
         self.assertEqual(self.client.rows["rid-1"]["shots"], [])
+
+    def test_bot_room_on_a_pvp_map_uploads_with_no_screenshots(self):
+        # only Ocean is stamped training_room; a room with AI ships on any
+        # other map reads as pvp and must not wait for scorecards
+        self.client.meta = dict(self.client.meta, matchGroup="pvp", vehicles=[
+            {"name": "me", "relation": 0}, {"name": ":Hipper:", "relation": 2}])
+        self.make_replay("b.wowsreplay", mtime=time.time() - 100)
+        for _ in range(4):
+            self.eng.tick()
+        row = self.store.replays()[0]
+        self.assertEqual(row["state"], matcher.UPLOADED)
+        self.assertEqual(row["match_group"], matcher.TRAINING)
+        self.assertEqual(self.client.rows["rid-1"]["shots"], [])
+        self.assertEqual(self.client.rows["rid-1"]["meta"].get("no_scorecard_reason"), "training_room")
 
     def test_back_to_back_battles_each_get_their_own_shots(self):
         now = time.time()
