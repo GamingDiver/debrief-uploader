@@ -200,6 +200,15 @@ class _PopupHost:
     process. Here the root, the fonts and the logo image are created once and
     never freed. Each popup is only a Toplevel that is destroyed on the same
     thread that made it.
+
+    Idle, the Tk thread must have NO timer pending. It used to poll the
+    request queue with root.after(40) for the life of the process, 25 timers
+    a second. A Windows tray grew a steady 2.7 MB a minute from v1.6.0 (the
+    release that added this host) whether it was uploading or not, to 32 GB
+    after 8 days, while the engine loop's Python heap measured flat: that
+    timer was the only thing running nonstop on Windows alone (2026-11-05
+    logs). Now a right click wakes the Tk thread with a single after(0)
+    call, which tkinter hands to the Tk thread, and nothing runs in between.
     """
 
     def __init__(self):
@@ -210,6 +219,28 @@ class _PopupHost:
 
     def request(self, icon, x, y):
         self.q.put((icon, x, y))
+        if self.ready:
+            # Called from pystray's thread: tkinter queues this onto the Tk
+            # thread's loop, which is how the popup gets opened there.
+            try:
+                self.root.after(0, self._drain)
+            except Exception as e:
+                print("tray menu:", e)
+
+    def _drain(self):
+        try:
+            while True:
+                icon, x, y = self.q.get_nowait()
+                if self.open:
+                    continue
+                self.open = True
+                try:
+                    self._show(icon, x, y)
+                except Exception as e:
+                    print("tray menu:", e)
+                    self.open = False
+        except queue.Empty:
+            pass
 
     def p(self, n):
         return int(round(n * self.k))
@@ -238,23 +269,7 @@ class _PopupHost:
             print("tray menu:", e)
             return
 
-        def poll():
-            try:
-                while True:
-                    icon, x, y = self.q.get_nowait()
-                    if self.open:
-                        continue
-                    self.open = True
-                    try:
-                        self._show(icon, x, y)
-                    except Exception as e:
-                        print("tray menu:", e)
-                        self.open = False
-            except queue.Empty:
-                pass
-            root.after(40, poll)
-
-        poll()
+        self._drain()             # a right click that came before `ready`
         root.mainloop()
 
     def _show(self, icon, cx, cy):
