@@ -199,6 +199,30 @@ def resume_shots(client, store, rec, log, settings):
     return rec["short_code"]
 
 
+def add_late_shots(client, store, rec, log, settings):
+    """Screenshots found after this battle was uploaded: put them on its row
+    and ask the site to read them, exactly as a duplicate upload does when
+    the battle is already up (see upload())."""
+    md5 = rec["md5"]
+    shots = store.shots_for(md5)
+    n = _put_shots(client, rec["remote_id"], shots, log, settings)
+    if n:
+        try:
+            client.rpc("reprocess_own_replay",
+                       {"p_short_code": rec["short_code"],
+                        "p_shots_replaced": True})
+        except ApiError as e:
+            log.warn("could not ask for a re-read: %s" % e.message)
+    done = {"state": matcher.UPLOADED, "late_shots": 0, "last_error": None}
+    if n:
+        # (with none sent, the note -- e.g. "no screenshots - your choice" --
+        # stays, so the same battle is not offered them again)
+        done["note"] = "screenshots added after upload"
+    store.update_replay(md5, **done)
+    store.mark_shots_uploaded(md5)
+    return rec["short_code"]
+
+
 def _put_shots(client, replay_id, shots, log, settings):
     """Transform and upload each screenshot as <id>/shotN.jpg.
 

@@ -114,6 +114,9 @@ class EngineCase(unittest.TestCase):
         self.eng = engine.Engine(self.s, self.store, self.client, self.log)
         self.eng._first_scan = False        # treat everything as live
         self.eng._watch_start = lambda path: 0
+        # No battle-time OCR here (it would run Windows OCR on these flat
+        # fixtures on the Windows runner); test_screen_time covers it.
+        self.eng.read_screen_headers = lambda paths: {}
 
     def tearDown(self):
         config.staging_dir = self._orig_staging

@@ -60,6 +60,18 @@ CREATE INDEX IF NOT EXISTS shots_t ON shots(t);
 CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v TEXT);
 """
 
+# Columns added after the first release. CREATE TABLE IF NOT EXISTS leaves an
+# existing table alone, so an older install's database gains them here.
+MIGRATIONS = (
+    # the battle time read off the screenshot: NULL = not read yet,
+    # "" = read and not found, else "YYYY-MM-DD HH:MM" (screentime.to_text)
+    ("shots", "screen_time", "TEXT"),
+    ("shots", "screen_mode", "TEXT"),
+    # 1 = screenshots found after this battle was uploaded are waiting to be
+    # added to its row on the site
+    ("replays", "late_shots", "INTEGER DEFAULT 0"),
+)
+
 
 class Store:
     def __init__(self, path):
@@ -69,6 +81,10 @@ class Store:
         self.db.row_factory = sqlite3.Row
         self.db.execute("PRAGMA journal_mode=WAL")
         self.db.executescript(SCHEMA)
+        for table, col, decl in MIGRATIONS:
+            have = [r[1] for r in self.db.execute("PRAGMA table_info(%s)" % table)]
+            if col not in have:
+                self.db.execute("ALTER TABLE %s ADD COLUMN %s %s" % (table, col, decl))
         self.db.commit()
 
     def close(self):
@@ -157,6 +173,12 @@ class Store:
     def shots_for(self, md5):
         return self._all("SELECT * FROM shots WHERE replay_md5=? ORDER BY t", (md5,))
 
+    def shot_counts(self):
+        """{replay md5: number of screenshots attached to it}."""
+        return {r["replay_md5"]: r["n"] for r in self._all(
+            "SELECT replay_md5, COUNT(*) AS n FROM shots "
+            "WHERE replay_md5 IS NOT NULL GROUP BY replay_md5")}
+
     def attach_shots(self, paths, md5):
         self._writemany("UPDATE shots SET replay_md5=? WHERE path=?",
                         [(md5, p) for p in paths])
@@ -182,6 +204,21 @@ class Store:
             return self._all("SELECT * FROM shots")
         return self._all("SELECT * FROM shots WHERE uploaded=?",
                          (1 if uploaded else 0,))
+
+    def set_screen_header(self, path, screen_time, mode):
+        """Remember what the screenshot's battle-time line said (see
+        MIGRATIONS for the encoding)."""
+        self._write("UPDATE shots SET screen_time=?, screen_mode=? WHERE path=?",
+                    (screen_time, mode, path))
+
+    def screen_pairs(self, limit=50):
+        """(screen_time, played_at) of recent screenshots that went with a
+        battle, to learn this PC's clock error from."""
+        return self._all(
+            "SELECT s.screen_time AS screen_time, r.played_at AS played_at "
+            "FROM shots s JOIN replays r ON r.md5 = s.replay_md5 "
+            "WHERE s.screen_time IS NOT NULL AND s.screen_time != '' "
+            "AND r.played_at IS NOT NULL ORDER BY s.t DESC LIMIT ?", (limit,))
 
     def forget_shots(self, paths):
         """Detach and ignore: these are never matched or uploaded."""

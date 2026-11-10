@@ -21,6 +21,8 @@ import re
 from dataclasses import dataclass, field
 from typing import List, Optional
 
+from . import screentime
+
 # ---- replay lifecycle ------------------------------------------------------
 NEW = "new"                      # quarantined, metadata not read yet
 AWAITING_SHOTS = "awaiting_shots"  # metadata read, real battle, needs scorecards
@@ -72,6 +74,16 @@ class ReplayRec:
     map_name: Optional[str] = None
     header_dt: Optional[float] = None   # epoch from the header, may be skewed
     duration: Optional[float] = None    # the battle's TIME LIMIT, not its length
+    played_at: Optional[str] = None     # header dateTime as the site stores it
+    remote_id: Optional[str] = None     # the row on the site, once uploaded
+    n_shots: int = 0                    # screenshots attached to it here
+    backfill: bool = False
+    hand_picked: bool = False           # the user chose its screenshots
+
+    @property
+    def header_time(self):
+        """The header's start as a naive local datetime, or None."""
+        return screentime.parse_header_time(self.played_at)
 
     @property
     def is_training(self):
@@ -108,6 +120,7 @@ AMBIGUOUS_REASON = "an earlier battle is still missing its scorecards"
 AUTO = "auto"        # confident: upload it
 HOLD = "hold"        # ambiguous: ask a human, never guess
 NONE = "none"        # nothing to attach to (yet)
+LATE = "late"        # screenshots of a battle that is already on the site
 
 
 @dataclass
@@ -116,6 +129,7 @@ class Decision:
     replay: Optional[ReplayRec] = None
     alternatives: List[ReplayRec] = field(default_factory=list)
     reason: str = ""
+    by_screen: bool = False      # decided by the battle time on the screen
 
     def __repr__(self):
         k = self.replay.key[:8] if self.replay else "-"
@@ -291,3 +305,85 @@ def clock_skew(replay):
 
 def skew_is_sane(skew):
     return skew is not None and 0 <= skew <= 1200
+
+
+# ---- the battle time printed on the screen ---------------------------------
+# Screenshots taken long after the battle (old results reopened from port)
+# carry no useful file time, and two battles' tabs taken seconds apart look
+# like one group. The time printed on the screen names the battle outright.
+# See screentime.py for what it is and how far it can be trusted.
+
+def _hhmm(dt):
+    return dt.strftime("%d.%m %H:%M")
+
+
+def match_by_screen(cluster, screen, mode, replays, cfg, offset_s=0.0):
+    """match_cluster, told the battle time printed on the screenshots.
+
+    screen None (not read, or not found) is exactly match_cluster. Otherwise:
+    the one battle whose header the time fits wins, whatever its file time
+    says; failing that, the file-time match stands unless the time
+    contradicts it -- then nothing is attached at all.
+    """
+    if screen is None:
+        return match_cluster(cluster, replays, cfg)
+    if len(cluster) > cfg["max_shots"]:
+        return Decision(HOLD, reason="%d screenshots in one burst - pick the scorecards"
+                                     % len(cluster))
+    battles = [(r.key, r.header_time, r.map_name) for r in replays
+               if r.header_time is not None]
+    key = screentime.pick_battle(screen, battles, offset_s, mode)
+    if key is not None:
+        r = next(r for r in replays if r.key == key)
+        d = _named_by_screen(cluster, r, screen, cfg)
+        d.by_screen = True
+        return d
+
+    d = match_cluster(cluster, replays, cfg)
+    if d.replay is not None and screentime.relation(
+            screen, d.replay.header_time, offset_s) == screentime.CONTRADICTS:
+        return Decision(NONE, by_screen=True,
+                        reason="the battle time on these screenshots (%s) "
+                               "is not the nearest battle's (started %s)"
+                               % (_hhmm(screen), _hhmm(d.replay.header_time)))
+    if d.alternatives:
+        d.alternatives = [a for a in d.alternatives
+                          if screentime.relation(screen, a.header_time, offset_s)
+                          != screentime.CONTRADICTS]
+    return d
+
+
+def _named_by_screen(cluster, r, screen, cfg):
+    """The screen's time names battle r. Attach to it if it still wants
+    screenshots; never hand them to any other battle."""
+    when = _hhmm(screen)
+    if r.is_training:
+        return Decision(NONE, reason="the battle time names a training room")
+    if r.hand_picked:
+        return Decision(NONE, reason="these are of a battle whose screenshots "
+                                     "you chose yourself (%s)" % when)
+    wants = (r.state in PAIRABLE
+             or (r.state == ORPHAN and not r.remote_id)
+             or (r.state == HELD and r.n_shots == 0)
+             or (r.state == UPLOADED and r.remote_id and r.n_shots == 0))
+    if not wants:
+        return Decision(NONE, reason="these are of a battle that already has "
+                                     "its screenshots or is not waiting for "
+                                     "them (%s)" % when)
+    if len(cluster) < 2:
+        return Decision(HOLD, replay=r,
+                        reason="only one scorecard - the other tab is missing")
+    if cfg.get("review_mode"):
+        return Decision(HOLD, replay=r, reason="review mode is on")
+    if r.state == UPLOADED:
+        if r.backfill:
+            return Decision(HOLD, replay=r, reason="screenshots found for a battle "
+                                                   "from before the app was running "
+                                                   "- add them?")
+        return Decision(LATE, replay=r, reason="screenshots found after upload; "
+                                               "battle time on screen %s" % when)
+    if r.state == HELD:
+        return Decision(HOLD, replay=r, reason="screenshots found later (battle "
+                                               "time on screen %s) - upload it?" % when)
+    return Decision(AUTO, replay=r, reason="matched by the battle time on screen (%s)"
+                                           % when)

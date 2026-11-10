@@ -7,17 +7,28 @@ upload.
 import os
 import time
 
-from . import api, config, images, matcher, uploader, watcher
+from . import (api, config, images, matcher, screenocr, screentime, uploader,
+               watcher)
 from .api import ApiError
-from .matcher import (AWAITING_SHOTS, HELD, NEW, ORPHAN, READY, ReplayRec,
-                      ShotRec, SKIPPED, UPLOADED, UPLOADING)
+from .matcher import (AWAITING_SHOTS, Cluster, HELD, NEW, ORPHAN, READY,
+                      ReplayRec, ShotRec, SKIPPED, UPLOADED, UPLOADING)
+
+# Notes that mark a battle whose screenshots the user picked by hand.
+CHOSEN_NOTE = "screenshots chosen by you"
+CHOSEN_NONE_NOTE = "no screenshots - your choice"
+LATE_NOTE = "screenshots found after upload - adding them"
+LATE_GIVE_UP = 5          # attempts before late screenshots stop retrying
 
 
-def _rec(row):
+def _rec(row, n_shots=0):
     return ReplayRec(key=row["md5"], t_close=row["t_close"] or 0,
                      state=row["state"], match_group=row["match_group"],
                      ship=row["player_ship"], map_name=row["map_name"],
-                     header_dt=row["header_dt"], duration=row["duration_s"])
+                     header_dt=row["header_dt"], duration=row["duration_s"],
+                     played_at=row["played_at"], remote_id=row["remote_id"],
+                     n_shots=n_shots, backfill=bool(row["backfill"]),
+                     hand_picked=(row["note"] or "") in (CHOSEN_NOTE,
+                                                         CHOSEN_NONE_NOTE))
 
 
 class Engine:
@@ -37,6 +48,10 @@ class Engine:
         self._seen_files = set()
         self._said = {}
         self._last_beat = 0.0
+        # Reads the battle time off screenshots: {path: (datetime|None,
+        # mode line|None)}, leaving out any it could not try. Swapped out in
+        # tests; on anything but Windows it reads nothing.
+        self.read_screen_headers = lambda paths: screenocr.read_headers(paths, log)
         self._forget_stale_shots()
         self._recheck_held()
 
@@ -367,41 +382,116 @@ class Engine:
                 % (len(g), time.strftime("%H:%M:%S", time.localtime(when))))
         done = 0
         for cluster in sorted(closed, key=lambda c: c.t_first):
-            live = {r["md5"]: r for r in self.store.replays()}
-            recs = [_rec(r) for r in live.values()]
-            d = matcher.match_cluster(cluster, recs, self.s)
-            paths = [s.path for s in cluster.shots]
-            if d.kind == matcher.AUTO:
-                row = live[d.replay.key]
-                self.store.attach_shots(paths, d.replay.key)
-                if row["backfill"]:
-                    self.store.update_replay(
-                        d.replay.key, state=HELD,
-                        note="found before the app was running - upload it?")
-                    self.log.info("paired %d screenshots with %s (from before "
-                                  "the app started - confirm to upload)"
-                                  % (len(paths), self._label(row)))
-                else:
-                    self.store.update_replay(d.replay.key, state=READY, note=None)
-                    self.log.info("paired %d screenshots with %s (%s)"
-                                  % (len(paths), self._label(row), d.reason))
-                done += 1
-            elif d.kind == matcher.HOLD:
-                if d.replay:
-                    self.store.attach_shots(paths, d.replay.key)
-                    alts = ", ".join(self._label(live[a.key]) for a in d.alternatives)
-                    self.store.update_replay(
-                        d.replay.key, state=HELD,
-                        note=d.reason + (" (or: %s)" % alts if alts else ""))
-                    self.log.warn("needs you: %s - %s. Nothing uploads for "
-                                  "this battle until you run "
-                                  "'Debrief.cmd review'"
-                                  % (self._label(live[d.replay.key]), d.reason))
-                    done += 1
+            self._read_screen_times(cluster)
+            for group, d in self._decide(cluster):
+                done += self._apply(group, d)
         # Screenshots that never found a battle stop being considered, but the
         # files themselves are never touched.
         self.store.prune_shots(now - self.s["unmatched_keep"])
         return done
+
+    def _live(self):
+        counts = self.store.shot_counts()
+        live = {r["md5"]: r for r in self.store.replays()}
+        return live, [_rec(r, counts.get(r["md5"], 0)) for r in live.values()]
+
+    def _read_screen_times(self, cluster):
+        """Read (once per screenshot, cached) the battle time printed on it."""
+        todo = [s.path for s in cluster.shots
+                if (self.store.shot(s.path) or {"screen_time": ""})["screen_time"] is None]
+        if not todo:
+            return
+        try:
+            got = self.read_screen_headers(todo) or {}
+        except Exception as e:            # never let OCR stop the matching
+            self.log.warn("reading battle times failed: %s" % e)
+            got = {}
+        for p, (dt, mode) in got.items():
+            self.store.set_screen_header(p, screentime.to_text(dt),
+                                         mode if dt else None)
+            if dt:
+                self.log.info("%s: battle time on screen %s"
+                              % (os.path.basename(p), dt.strftime("%d.%m.%Y %H:%M")))
+
+    def _clock_offset(self):
+        pairs = [(screentime.from_text(r["screen_time"]),
+                  screentime.parse_header_time(r["played_at"]))
+                 for r in self.store.screen_pairs()]
+        return screentime.machine_offset(pairs)
+
+    def _decide(self, cluster):
+        """Yield (group, Decision) for one closed cluster: split wherever the
+        battle time on the screenshots changes, and decide each part. Each
+        part is decided against the store as it is when it is reached, so a
+        caller applying them in turn has the previous part already counted."""
+        timed = []
+        for s in cluster.shots:
+            row = self.store.shot(s.path)
+            timed.append((s, (screentime.from_text(row["screen_time"]),
+                              row["screen_mode"]) if row else (None, None)))
+        parts = screentime.split_by_screen_time(
+            [((s, hdr), hdr[0]) for s, hdr in timed])
+        offset = self._clock_offset()
+        for part in parts:
+            group = Cluster([s for s, _h in part])
+            screen = next((h[0] for _s, h in part if h[0]), None)
+            mode = next((h[1] for _s, h in part if h[0]), None)
+            _live, recs = self._live()
+            yield group, matcher.match_by_screen(group, screen, mode, recs,
+                                                 self.s, offset)
+
+    def _apply(self, cluster, d):
+        """Carry out one decision. Returns 1 when screenshots were attached."""
+        live, _recs = self._live()
+        paths = [s.path for s in cluster.shots]
+        if d.kind == matcher.LATE or (d.kind == matcher.HOLD and d.replay
+                                       and live[d.replay.key]["state"] == UPLOADED):
+            row = live[d.replay.key]
+            self.store.attach_shots(paths, d.replay.key)
+            late = d.kind == matcher.LATE
+            self.store.update_replay(
+                d.replay.key, state=READY if late else HELD, late_shots=1,
+                attempts=0, next_try=0,
+                note=LATE_NOTE if late else
+                "already uploaded - add these screenshots to it? (%s)" % d.reason)
+            self.log.info("%d screenshot(s) of %s, which is already uploaded: %s"
+                          % (len(paths), self._label(row),
+                             "adding them to it" if late
+                             else "waiting for you (%s)" % d.reason))
+            return 1
+        if d.kind == matcher.AUTO:
+            row = live[d.replay.key]
+            self.store.attach_shots(paths, d.replay.key)
+            if row["backfill"]:
+                self.store.update_replay(
+                    d.replay.key, state=HELD,
+                    note="found before the app was running - upload it?")
+                self.log.info("paired %d screenshots with %s (from before "
+                              "the app started - confirm to upload)"
+                              % (len(paths), self._label(row)))
+            else:
+                self.store.update_replay(d.replay.key, state=READY, note=None)
+                self.log.info("paired %d screenshots with %s (%s)"
+                              % (len(paths), self._label(row), d.reason))
+            return 1
+        elif d.kind == matcher.HOLD:
+            if d.replay:
+                self.store.attach_shots(paths, d.replay.key)
+                alts = ", ".join(self._label(live[a.key]) for a in d.alternatives)
+                self.store.update_replay(
+                    d.replay.key, state=HELD,
+                    note=d.reason + (" (or: %s)" % alts if alts else ""))
+                self.log.warn("needs you: %s - %s. Nothing uploads for "
+                              "this battle until you run "
+                              "'Debrief.cmd review'"
+                              % (self._label(live[d.replay.key]), d.reason))
+                return 1
+        elif d.kind == matcher.NONE and d.by_screen:
+            # Say why, once: these were refused on the battle time, which is
+            # worth knowing, rather than simply having no battle yet.
+            self._say_once("none:%s" % paths[0], "%d screenshot(s) not matched: %s"
+                           % (len(paths), d.reason))
+        return 0
 
     # ---- screenshot groups ------------------------------------------------
     # One place that groups the free screenshots the way the matcher does, so
@@ -481,7 +571,10 @@ class Engine:
         label = self._label(row)
         try:
             self.store.update_replay(md5, state=UPLOADING)
-            if row["remote_id"]:
+            if row["remote_id"] and row["late_shots"]:
+                code = uploader.add_late_shots(self.client, self.store, row,
+                                               self.log, self.s)
+            elif row["remote_id"]:
                 code = uploader.resume_shots(self.client, self.store, row,
                                              self.log, self.s)
                 self.log.info("Ready for review: %s  %s/wowslegends/replays/?r=%s"
@@ -502,7 +595,15 @@ class Engine:
             cur = self.store.replay(md5)
             resume = bool(cur and cur["remote_id"])
             state = UPLOADING if resume else READY
-            if e.terminal:
+            if cur and cur["late_shots"] and attempts >= LATE_GIVE_UP:
+                # The battle itself is safely on the site; a row that keeps
+                # refusing extra screenshots must not retry forever.
+                self.store.update_replay(md5, state=UPLOADED, late_shots=0,
+                                         attempts=attempts, last_error=e.message,
+                                         note="could not add the later screenshots")
+                self.log.warn("%s: gave up adding the later screenshots (%s)"
+                              % (label, e.message))
+            elif e.terminal:
                 self.blocked = e.message
                 self.store.update_replay(md5, state=state, attempts=attempts,
                                          last_error=e.message)
@@ -566,16 +667,20 @@ class Engine:
         window still shows it."""
         shots = [s["path"] for s in self.store.shots_for(md5)]
         to_row = self.store.replay(to_md5)
+        row = self.store.replay(md5)
         self.store.detach_shots(md5)
         self.store.attach_shots(shots, to_md5)
         self.store.update_replay(
-            md5, state=AWAITING_SHOTS,
-            note="you gave its screenshots to %s"
-                 % (self._label(to_row) if to_row else "another battle"))
+            md5, note="you gave its screenshots to %s"
+                      % (self._label(to_row) if to_row else "another battle"),
+            # a battle already on the site goes back to being uploaded
+            **({"state": UPLOADED, "late_shots": 0}
+               if row is not None and row["remote_id"] and row["late_shots"]
+               else {"state": AWAITING_SHOTS}))
         self.store.update_replay(to_md5, state=HELD, note=self.MOVED_NOTE)
 
-    CHOSEN_NOTE = "screenshots chosen by you"
-    CHOSEN_NONE_NOTE = "no screenshots - your choice"
+    CHOSEN_NOTE = CHOSEN_NOTE
+    CHOSEN_NONE_NOTE = CHOSEN_NONE_NOTE
 
     def set_shots(self, md5, paths):
         """Replace the screenshots of a held battle with the user's own pick.
@@ -648,6 +753,15 @@ class Engine:
         self.confirm(md5)
 
     def skip(self, md5):
+        row = self.store.replay(md5)
+        if row is not None and row["remote_id"] and row["late_shots"]:
+            # Screenshots found after this battle was uploaded: skipping them
+            # leaves the battle on the site exactly as it is.
+            self.store.forget_shots([s["path"] for s in self.store.shots_for(md5)
+                                     if not s["uploaded"]])
+            self.store.update_replay(md5, state=UPLOADED, late_shots=0,
+                                     note="later screenshots skipped by you")
+            return
         self.store.update_replay(md5, state=SKIPPED, note="skipped by you")
 
     def unblock(self):
@@ -860,9 +974,10 @@ class Engine:
                     % (len(g), time.strftime("%H:%M:%S", time.localtime(when)),
                        max(0, when - now)))
             live = {r["md5"]: r for r in self.store.replays()}
-            recs = [_rec(r) for r in live.values()]
-            for cl in sorted(closed, key=lambda c: c.t_first):
-                d = matcher.match_cluster(cl, recs, self.s)
+            # the same decision match() makes, from battle times already read
+            decided = [gd for cl in sorted(closed, key=lambda c: c.t_first)
+                       for gd in self._decide(cl)]
+            for cl, d in decided:
                 when = time.strftime("%H:%M:%S", time.localtime(cl.t_first))
                 if d.replay:
                     add("  %d shot(s) from %s -> %s: %s"

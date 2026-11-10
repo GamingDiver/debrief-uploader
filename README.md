@@ -294,7 +294,11 @@ old; only the scorecard-checked figures are missing.
 2. Asks the site what the battle was (the replay is encrypted; the app never
    holds the key).
 3. Groups your screenshots into per-battle bursts and matches each burst to the
-   battle it followed.
+   battle it followed. It also reads the battle time every result screen
+   prints under the mode/map line (`09.11.2026 21:43`), so screenshots of
+   old results reopened from port go to the battle they show, even hours
+   later and even when two battles' tabs are taken seconds apart (see
+   [Late screenshots](#late-screenshots)).
 4. Uploads the replay and its scorecards, then shows you the link.
 
 Training-room battles upload straight away — they have no scorecard screens.
@@ -302,7 +306,8 @@ Training-room battles upload straight away — they have no scorecard screens.
 A battle you took no scorecards for uploads anyway once the replay is at least
 15 minutes old. You still get the full debrief; only the scorecard-checked
 figures are missing. Screenshots taken more than 15 minutes after a battle
-closes are no longer matched to it. To keep scorecard-less replays on this PC
+closes are no longer matched to it by time taken, only by the battle time
+printed on the screen. To keep scorecard-less replays on this PC
 instead, set `"upload_without_scorecards": false` in `settings.json`.
 
 ## When it asks you something
@@ -362,6 +367,29 @@ Belt and braces:
 - **Pause** in the tray menu stops all reading while you play something you
   do not want watched.
 
+### Late screenshots
+
+Every result screen prints its battle's date and start minute in the top-left
+corner. On Windows the uploader reads just that corner with Windows' own
+built-in text recognition (no extra download, and nothing is sent: the
+picture never leaves your PC, and only the date, time and mode/map line are
+kept). Then:
+
+- Screenshots whose battle times differ are treated as different battles,
+  however close together you took them.
+- They go to the battle whose replay started at that minute. If that battle
+  was already uploaded without scorecards, they are added to it on the site.
+  A battle that already has its scorecards keeps them.
+- They are never attached to a battle whose start time the screen
+  contradicts. Results of a battle the uploader never read (played before you
+  pressed **Start watching**, in an excluded folder, or while paused) are
+  therefore not matched to anything and not uploaded.
+- If the time cannot be read (no Windows text-recognition language
+  installed, an unusual screen), matching works exactly as it did before.
+
+A PC clock that is hours or days off does not stop this from working; the
+time then simply decides nothing.
+
 ### Training rooms
 
 Training-room battles upload as **private** by default. They are practice, and
@@ -408,7 +436,8 @@ The log tells you the exact time it will decide, so a wait never looks like a
 stall.
 
 Raising `shot_max_age_hours` is safe; it only widens what gets looked at, and
-matching still refuses anything more than 25 minutes from its battle.
+matching by time taken still refuses anything more than 25 minutes from its
+battle (matching by the battle time on the screen has no such limit).
 
 ## Dependencies
 
