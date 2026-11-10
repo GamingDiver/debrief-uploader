@@ -24,15 +24,19 @@ from PIL import Image, ImageOps
 
 from . import images, screentime
 
-# The corner holding the mode/map line and the time, as fractions of the
-# game picture (after any ultrawide bars are trimmed). Also covers the same
-# screens reopened from port, where the lines sit lower, under the port menu.
-BAND_W = 0.5
-BAND_H = 0.25
+# The corner holding the time, as fractions of the game picture (after any
+# ultrawide bars are trimmed). Measured on 381 result screens: the date
+# line ends by x = 0.154 and its centre lies between y = 0.079 and 0.14 (the
+# lower ones are the same screens reopened from port, under the port menu).
+# The band is kept that tight because Windows OCR missed the line at about
+# 30 px glyph height and read it at 40 px: the narrower the band, the more
+# it can be enlarged within the engine's size limit.
+BAND_W = 0.3
+BAND_H = 0.22
 # Windows.Media.Ocr refuses images larger than OcrEngine.MaxImageDimension
 # (2600 px) on either side.
 MAX_DIM = 2600
-MAX_SCALE = 3.0
+MAX_SCALE = 5.0
 TIMEOUT_S = 90
 
 _unavailable = None     # why OCR cannot run on this PC, once known
@@ -57,7 +61,7 @@ def header_crop(path):
         x0, pw = images.pillarbox_bounds(im)
         w, h = im.size
         band = im.crop((x0, 0, x0 + max(1, int(pw * BAND_W)), max(1, int(h * BAND_H))))
-    g = band.convert("L")
+    g = ImageOps.autocontrast(band.convert("L"))
     bw, bh = g.size
     scale = min(MAX_SCALE, MAX_DIM / float(max(bw, bh)))
     if scale > 1.0:

@@ -571,8 +571,11 @@ class TestHeaderCrop(unittest.TestCase):
             x0, pw = images.pillarbox_bounds(im)
         self.assertEqual((x0, pw), (440, 2560))
         g = screenocr.header_crop(p)
-        # the crop starts at the game picture, not in the black bar
-        self.assertGreater(g.getpixel((5, g.size[1] // 2)), 20)
+        # the band is a share of the 2560 px picture, not of the 3440 px
+        # frame: narrower, so enlarged further (untrimmed it would be 796 tall)
+        bw, bh = int(2560 * screenocr.BAND_W), int(1440 * screenocr.BAND_H)
+        scale = min(screenocr.MAX_SCALE, screenocr.MAX_DIM / float(bw))
+        self.assertEqual(g.size, (int(bw * scale), int(bh * scale)))
 
     @unittest.skipIf(sys.platform == "win32", "OCR is available on Windows")
     def test_reads_nothing_off_windows(self):
@@ -637,7 +640,12 @@ class TestWindowsEndToEnd(LateSetsBase):
         if not screenocr.read_headers([os.path.join(self.sdir, "p1.png")]):
             self.skipTest("Windows OCR unavailable here: %s"
                           % screenocr.why_unavailable())
-        self.check_each_set_goes_to_its_own_uploaded_battle()
+        try:
+            self.check_each_set_goes_to_its_own_uploaded_battle()
+        finally:
+            print("\nread by Windows OCR:", {os.path.basename(r["path"]): r["screen_time"]
+                                              for r in self.store.all_shots()},
+                  "battles A/B began", _minute(self.hA), _minute(self.hB))
 
 
 if __name__ == "__main__":
