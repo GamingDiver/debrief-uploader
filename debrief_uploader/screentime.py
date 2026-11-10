@@ -47,10 +47,11 @@ CONTRADICTS = "contradicts"
 CLOCK_OFFSET = "clock_offset"
 
 # "09.11.2026 21:43", with OCR's habits: a comma for a dot ("28.10,2026"),
-# junk glyphs after the minute ("18:30l"). Year-first is accepted too, for a
+# junk glyphs after the minute ("18:30l"), a dot read for the space
+# ("18.07.2026.00:52"). Year-first is accepted too, for a
 # client that prints it that way; a slash date is not, because D/M and M/D
 # cannot be told apart and a wrong guess is worse than no reading.
-_DMY = re.compile(r"(?<!\d)(\d{1,2})\s?[.,]\s?(\d{1,2})\s?[.,]\s?(\d{4})\s+(\d{1,2})\s?[:.]\s?(\d{2})(?!\d)")
+_DMY = re.compile(r"(?<!\d)(\d{1,2})\s?[.,]\s?(\d{1,2})\s?[.,]\s?(\d{4})(?:\s+|\s?[.,]\s?)(\d{1,2})\s?[:.]\s?(\d{2})(?!\d)")
 _YMD = re.compile(r"(?<!\d)(\d{4})\s?[.\-/年]\s?(\d{1,2})\s?[.\-/月]\s?(\d{1,2})日?\s+(\d{1,2})\s?[:.]\s?(\d{2})(?!\d)")
 # the mode/map line: "STANDARD - DOMINATION - TRAP" (em dashes on screen)
 _MODE_SEP = re.compile(r"\s+[-–—]\s+")

@@ -42,6 +42,7 @@ class TestReadingTheLine(unittest.TestCase):
         self.assertEqual(P("27.10.2026 18:30ł"), datetime(2026, 10, 27, 18, 30))
         self.assertEqual(P("28.10,2026 10:06"), datetime(2026, 10, 28, 10, 6))
         self.assertEqual(P("09.11.2026 21 :43"), datetime(2026, 11, 9, 21, 43))
+        self.assertEqual(P("18.07.2026.00:52"), datetime(2026, 7, 18, 0, 52))
 
     def test_year_first(self):
         self.assertEqual(P("2026/11/09 21:43"), datetime(2026, 11, 9, 21, 43))
