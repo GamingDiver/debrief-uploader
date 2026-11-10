@@ -556,13 +556,18 @@ class TestHeaderCrop(unittest.TestCase):
         import shutil
         shutil.rmtree(self.tmp, ignore_errors=True)
 
-    def test_crop_is_the_top_left_corner_enlarged_within_limits(self):
+    def test_crops_put_the_date_line_at_the_target_heights(self):
         for w, h in ((1920, 1080), (2560, 1440), (3840, 2160), (1280, 720)):
             p = result_screen(os.path.join(self.tmp, "s.png"), w, h)
-            g = screenocr.header_crop(p)
-            self.assertLessEqual(max(g.size), screenocr.MAX_DIM, (w, h))
-            self.assertGreaterEqual(g.size[0], int(w * screenocr.BAND_W), (w, h))
-            self.assertEqual(g.mode, "L")
+            crops = screenocr.header_crops(p)
+            band_h = int(h * screenocr.BAND_H)
+            for g in crops:
+                self.assertLessEqual(max(g.size), screenocr.MAX_DIM, (w, h))
+                self.assertEqual(g.mode, "L")
+                line = screenocr.DATE_H * h * g.size[1] / float(band_h)
+                self.assertGreaterEqual(line, screenocr.DATE_H * h - 1, "never shrunk")
+                self.assertLessEqual(line, max(screenocr.TARGET_PX) + 1, (w, h))
+            self.assertTrue(crops)
 
     def test_ultrawide_bars_are_trimmed_first(self):
         p = result_screen(os.path.join(self.tmp, "uw.png"), 2560, 1440, bars=440)
@@ -570,12 +575,11 @@ class TestHeaderCrop(unittest.TestCase):
             from debrief_uploader import images
             x0, pw = images.pillarbox_bounds(im)
         self.assertEqual((x0, pw), (440, 2560))
-        g = screenocr.header_crop(p)
-        # the band is a share of the 2560 px picture, not of the 3440 px
-        # frame: narrower, so enlarged further (untrimmed it would be 796 tall)
-        bw, bh = int(2560 * screenocr.BAND_W), int(1440 * screenocr.BAND_H)
-        scale = min(screenocr.MAX_SCALE, screenocr.MAX_DIM / float(bw))
-        self.assertEqual(g.size, (int(bw * scale), int(bh * scale)))
+        g = screenocr.header_crops(p)[0]
+        # the band is a share of the 2560 px picture, not of the 3440 px frame
+        self.assertAlmostEqual(g.size[0] / float(g.size[1]),
+                               int(2560 * screenocr.BAND_W)
+                               / float(int(1440 * screenocr.BAND_H)), places=2)
 
     @unittest.skipIf(sys.platform == "win32", "OCR is available on Windows")
     def test_reads_nothing_off_windows(self):
@@ -603,10 +607,13 @@ class TestWindowsOcr(unittest.TestCase):
         return got
 
     def test_reads_the_battle_time(self):
+        # (720p is left out: the 10 px line drawn here is unreadable to it
+        # at any scale; a real 720p capture is untested)
         cases = [((1920, 1080, 0), "09.11.2026 20:27"),
                  ((2560, 1440, 0), "15.10.2026 08:39"),
-                 ((1280, 720, 0), "27.10.2026 19:06"),
-                 ((2560, 1080, 340), "31.12.2026 23:59")]
+                 ((3840, 2160, 0), "27.10.2026 19:06"),
+                 ((2560, 1080, 340), "31.12.2026 23:59"),
+                 ((1920, 1080, 0), "01.01.2027 00:00")]
         paths = [result_screen(os.path.join(self.tmp, "%d.png" % i), w, h, when, bars=b)
                  for i, ((w, h, b), when) in enumerate(cases)]
         got = self._read(paths)

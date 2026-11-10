@@ -28,15 +28,19 @@ from . import images, screentime
 # ultrawide bars are trimmed). Measured on 381 result screens: the date
 # line ends by x = 0.154 and its centre lies between y = 0.079 and 0.14 (the
 # lower ones are the same screens reopened from port, under the port menu).
-# The band is kept that tight because Windows OCR missed the line at about
-# 30 px glyph height and read it at 40 px: the narrower the band, the more
-# it can be enlarged within the engine's size limit.
 BAND_W = 0.3
 BAND_H = 0.22
+# The date line's height as a share of the picture's (median 0.0134 over 113
+# result screens), i.e. about 15 px at 1080p.
+DATE_H = 0.0134
+# Windows OCR read a drawn date line reliably at 16-30 px and lost it when a
+# 1080p capture was blown up past ~36 px (measured on the GitHub Windows
+# runner, 2026-11-10). So each corner is read twice, scaled so the line is
+# about these heights, and never shrunk.
+TARGET_PX = (22, 30)
 # Windows.Media.Ocr refuses images larger than OcrEngine.MaxImageDimension
 # (2600 px) on either side.
 MAX_DIM = 2600
-MAX_SCALE = 5.0
 TIMEOUT_S = 90
 
 _unavailable = None     # why OCR cannot run on this PC, once known
@@ -54,8 +58,9 @@ def why_unavailable():
     return _unavailable
 
 
-def header_crop(path):
-    """The enlarged greyscale top-left band of a screenshot, as a PIL image."""
+def header_crops(path):
+    """The top-left band of a screenshot in greyscale, once per TARGET_PX
+    scale, as PIL images."""
     with Image.open(path) as im:
         im.load()
         x0, pw = images.pillarbox_bounds(im)
@@ -63,11 +68,15 @@ def header_crop(path):
         band = im.crop((x0, 0, x0 + max(1, int(pw * BAND_W)), max(1, int(h * BAND_H))))
     g = ImageOps.autocontrast(band.convert("L"))
     bw, bh = g.size
-    scale = min(MAX_SCALE, MAX_DIM / float(max(bw, bh)))
-    if scale > 1.0:
-        g = g.resize((max(1, int(bw * scale)), max(1, int(bh * scale))),
-                     Image.LANCZOS)
-    return g
+    out = []
+    for px in TARGET_PX:
+        scale = min(px / (DATE_H * h), MAX_DIM / float(max(bw, bh)))
+        if scale > 1.0:
+            out.append(g.resize((max(1, int(bw * scale)), max(1, int(bh * scale))),
+                                Image.LANCZOS))
+        elif not out:
+            out.append(g)
+    return out
 
 
 # Reads every image listed in DEBRIEF_OCR_PATHS ('|'-separated; no Windows
@@ -192,19 +201,17 @@ def read_headers(paths, log=None):
         return {}
     tmp = tempfile.mkdtemp(prefix="debrief-ocr-")
     try:
-        crops = []                 # (path, crop file, inverted?)
+        crops = []                 # (path, crop file)
         for n, p in enumerate(paths):
             try:
-                g = header_crop(p)
+                variants = header_crops(p)
             except Exception as e:
                 if log:
                     log.warn("could not open %s to read its battle time (%s)"
                              % (os.path.basename(p), e))
                 continue
-            # The game prints light text on a dark sea; OCR engines are tuned
-            # for dark on light. Both are read, the plain one is preferred.
-            for inv, img in ((False, g), (True, ImageOps.invert(g))):
-                f = os.path.join(tmp, "%d%s.png" % (n, "i" if inv else ""))
+            for k, img in enumerate(variants):
+                f = os.path.join(tmp, "%d_%d.png" % (n, k))
                 img.save(f)
                 crops.append((p, f))
         if not crops:
