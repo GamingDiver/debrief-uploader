@@ -589,6 +589,61 @@ class TestHeaderCrop(unittest.TestCase):
         self.assertEqual(screenocr.read_headers([p]), {})
 
 
+class TestOcrOutputParsing(unittest.TestCase):
+    """What the PowerShell half prints, read back -- on every platform."""
+
+    def setUp(self):
+        import subprocess
+        self.tmp = tempfile.mkdtemp()
+        self._saved = (screenocr.available, screenocr.subprocess.run,
+                       screenocr._unavailable, screenocr._timeouts)
+        screenocr.available = lambda: True
+        screenocr._unavailable = None
+        self.stdout = b""
+        self.cp = subprocess.CompletedProcess
+
+        def run(args, **kw):
+            return self.cp(args, 0, self.stdout, b"")
+        screenocr.subprocess.run = run
+
+    def tearDown(self):
+        import shutil
+        (screenocr.available, screenocr.subprocess.run,
+         screenocr._unavailable, screenocr._timeouts) = self._saved
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_lines_per_image_and_the_best_reading_wins(self):
+        p = result_screen(os.path.join(self.tmp, "a.png"))
+        q = result_screen(os.path.join(self.tmp, "b.png"))
+        n = len(screenocr.header_crops(p))
+        self.assertEqual(n, len(screenocr.TARGET_PX), "1080p is read at both scales")
+        # image 0 = a at the first scale (garbled), 1 = a at the second,
+        # then b's two crops (nothing read)
+        self.stdout = ("status\tengine\ten-US\t2600\r\n"
+                       "0\tVICTORY!\r\n0\tSTANDARD \u2014 DOMINATION \u2014 TRAP\r\n"
+                       "0\t09.11.2O26 2O:27\r\n"
+                       "1\tSTANDARD \u2014 DOMINATION \u2014 TRAP\r\n1\t09.11.2026 20:27\r\n"
+                       "status\terror\t2\tbad image\r\n").encode("utf-8")
+        got = screenocr.read_headers([p, q])
+        self.assertEqual(got[p], (datetime(2026, 11, 9, 20, 27),
+                                  "STANDARD \u2014 DOMINATION \u2014 TRAP"))
+        self.assertEqual(got[q], (None, None), "read, and no time on it")
+
+    def test_no_ocr_language_stops_asking(self):
+        p = result_screen(os.path.join(self.tmp, "a.png"))
+        self.stdout = b"status\tnoengine\r\n"
+        self.assertEqual(screenocr.read_headers([p]), {})
+        self.assertEqual(screenocr.why_unavailable() if sys.platform == "win32"
+                         else screenocr._unavailable,
+                         "no Windows OCR language is installed")
+
+    def test_a_script_that_never_reaches_the_engine_stops_asking(self):
+        p = result_screen(os.path.join(self.tmp, "a.png"))
+        self.stdout = b""
+        self.assertEqual(screenocr.read_headers([p]), {})
+        self.assertIn("did not start", screenocr._unavailable)
+
+
 @unittest.skipUnless(sys.platform == "win32", "Windows OCR")
 class TestWindowsOcr(unittest.TestCase):
     """The real Windows.Media.Ocr pass on a drawn result-screen corner."""

@@ -164,6 +164,7 @@ def ocr_lines(image_paths, timeout=TIMEOUT_S, log=None):
         return None
     text = out.stdout.decode("utf-8", "replace")
     lines = {}
+    engine = False
     for raw in text.splitlines():
         parts = raw.rstrip("\r").split("\t")
         if parts[0] == "status":
@@ -177,6 +178,7 @@ def ocr_lines(image_paths, timeout=TIMEOUT_S, log=None):
                     log.warn("cannot read battle times from screenshots: %s - "
                              "matching by file time" % _unavailable)
                 return None
+            engine = engine or kind == "engine"
             if kind == "error" and log:
                 log.warn("could not read the battle time from one screenshot: %s"
                          % "\t".join(parts[3:]))
@@ -186,9 +188,16 @@ def ocr_lines(image_paths, timeout=TIMEOUT_S, log=None):
         except ValueError:
             continue
         lines.setdefault(i, []).append("\t".join(parts[1:]))
-    if out.returncode and not lines and log:
-        log.warn("reading battle times failed (PowerShell exit %d): %s"
-                 % (out.returncode, out.stderr.decode("utf-8", "replace")[:300]))
+    if not engine:
+        # PowerShell ran but the script never got as far as the OCR engine
+        # (blocked by policy, say): asking again would fail the same way.
+        _unavailable = ("Windows OCR did not start (PowerShell exit %d: %s)"
+                        % (out.returncode,
+                           out.stderr.decode("utf-8", "replace").strip()[:300]))
+        if log:
+            log.warn("cannot read battle times from screenshots: %s - "
+                     "matching by file time" % _unavailable)
+        return None
     return lines
 
 
