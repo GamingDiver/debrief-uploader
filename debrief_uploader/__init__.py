@@ -1,3 +1,3 @@
 """GamingDiver Debrief Uploader -- pair replays with their scorecards and
 upload them automatically."""
-__version__ = "1.7.0"
+__version__ = "1.7.1"
