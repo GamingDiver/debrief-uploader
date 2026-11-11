@@ -72,6 +72,14 @@ class FakeEngine:
     def settling(self, now=None):
         return self.settling_now
 
+    settling_rows = []              # the battles they look like going to
+
+    def settling_battles(self, now=None):
+        return self.settling_rows
+
+    def battle_name(self, row):
+        return "Myoko on Crash Zone (Standard)"
+
 
 class FakeSession:
     signed_in = True
@@ -1166,8 +1174,21 @@ class TestWindowsBuild(unittest.TestCase):
         seen = {}
         self._drive(lambda: self.ui.open_review(self.app), [
             (lambda r: seen.update(t=self._texts(r)), 0)])
-        self.assertIn("1 screenshot just taken - it is matched to a battle at",
-                      seen["t"])
+        self.assertIn("1 screenshot just taken. It waits until", seen["t"])
+        self.assertIn("then it is matched to a battle", seen["t"])
+
+    def test_settling_screenshots_name_their_battle(self):
+        """The wait names the battle the screenshots go to: a clock time
+        alone read as the battle's own time (Greg, 2026-11-10)."""
+        import time as _t
+        self.app.store = FakeStore(rows=[])
+        self.app.eng.settling_now = (1, _t.time() + 25)
+        self.app.eng.settling_rows = [{"md5": "m1"}]
+        seen = {}
+        self._drive(lambda: self.ui.open_review(self.app), [
+            (lambda r: seen.update(t=self._texts(r)), 0)])
+        self.assertIn("1 screenshot just taken, of Myoko on Crash Zone "
+                      "(Standard). It waits until", seen["t"])
 
     def test_picker_closes_when_its_battle_is_resolved_elsewhere(self):
         """A review finished while the picker was open left it choosing for

@@ -909,6 +909,32 @@ class TestShotGroups(EngineCase):
         # long after, the same shots are closed: nothing is settling
         self.assertEqual(self.eng.settling(now + 3600), (0, None))
 
+    def test_settling_names_the_battle_they_go_to(self):
+        """The wait names the battle, not only when it ends: "matched to a
+        battle at 17:37:23" read as the battle's own time (Greg, 2026-11-10)."""
+        now = time.time()
+        for i, name in enumerate(("a.png", "b.png")):
+            p = self.make_shot(name, mtime=now - 10 + i)
+            self.store.add_shot(p, now - 10 + i, 1920, 1080)
+        self.assertEqual(self.eng.settling(now)[0], 2)
+        # control: no battle has closed, so there is nothing to name
+        self.assertEqual(self.eng.settling_battles(now), [])
+        self.store.add_replay(md5="M1", filename="m1.wowsreplay",
+                              staged_path="/staged/m1", t_close=now - 60,
+                              header_dt=now - 1000, duration_s=1200,
+                              match_group="pvp", player_ship="PJSC008-Myoko",
+                              map_name="spaces/52_Britain",
+                              state=matcher.AWAITING_SHOTS)
+        rows = self.eng.settling_battles(now)
+        self.assertEqual([r["md5"] for r in rows], ["M1"])
+        self.assertEqual(self.eng.battle_name(rows[0]),
+                         "Myoko on Crash Zone (Standard)")
+        # a preview: the shot is still free and the battle still waiting
+        self.assertEqual(len(self.store.free_shots()), 2)
+        self.assertEqual(self.store.replay("M1")["state"], matcher.AWAITING_SHOTS)
+        # once settled there is nothing left to name
+        self.assertEqual(self.eng.settling_battles(now + 3600), [])
+
 
 class TestUserChosenScreenshots(EngineCase):
     """The review window's override (Greg, PR #6: "i dont trust the auto

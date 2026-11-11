@@ -7,8 +7,8 @@ upload.
 import os
 import time
 
-from . import (api, config, images, matcher, screenocr, screentime, uploader,
-               watcher)
+from . import (api, config, images, matcher, names, screenocr, screentime,
+               uploader, watcher)
 from .api import ApiError
 from .matcher import (AWAITING_SHOTS, Cluster, HELD, NEW, ORPHAN, READY,
                       ReplayRec, ShotRec, SKIPPED, UPLOADED, UPLOADING)
@@ -519,9 +519,33 @@ class Engine:
         return (sum(len(g) for g in open_),
                 max(self.decides_at(g) for g in open_))
 
+    def settling_battles(self, now=None):
+        """The battles the settling screenshots look like going to, oldest
+        first, so the wait can name the battle and not only a clock time.
+        A preview of the decision the matcher will make: it reads only the
+        battle times already read off the screenshots and changes nothing."""
+        _closed, open_ = self.shot_groups(now)
+        keys = []
+        for g in sorted(open_, key=lambda c: c.t_first):
+            for _group, d in self._decide(g):
+                if d.replay is not None and d.replay.key not in keys:
+                    keys.append(d.replay.key)
+        return [row for row in map(self.store.replay, keys) if row]
+
+    def battle_name(self, row):
+        """'Myoko on Crash Zone (Standard)', or what of it is known."""
+        ship = names.ship_name(row["player_ship"])
+        where = names.map_name(row["map_name"])
+        kind = names.battle_type(row["match_group"])
+        text = " on ".join(p for p in (ship, where) if p)
+        if kind:
+            text = "%s (%s)" % (text, kind) if text else kind
+        return text or self._label(row)
+
     def _label(self, row):
-        ship = (row["player_ship"] or "").split("-", 1)[-1].replace("-", " ")
-        parts = [p for p in (ship or None, row["map_name"] or None) if p]
+        ship = names.ship_name(row["player_ship"])
+        parts = [p for p in (ship or None, names.map_name(row["map_name"]) or None)
+                 if p]
         return " / ".join(parts) or (row["filename"] or row["md5"][:8])
 
     # ---- orphans ----------------------------------------------------------

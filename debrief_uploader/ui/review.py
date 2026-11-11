@@ -501,8 +501,14 @@ def _review_window(app, refresh_ms=1000):
         """(count, decided-at) of screenshots taken but not matched yet: the
         30-90 s the matcher waits in case another one is coming. Shown, so a
         battle with fresh screenshots is not a mystery for that minute
-        (Stargatecraft, PR #6: "it did appear ... but it took a minute-ish")."""
-        return app.eng.settling()
+        (Stargatecraft, PR #6: "it did appear ... but it took a minute-ish").
+        Names the battle they look like going to: a clock time alone read
+        as the battle's own time (Greg, 2026-11-10)."""
+        n, at = app.eng.settling()
+        if not n:
+            return 0, None, []
+        return n, at, [app.eng.battle_name(row)
+                       for row in app.eng.settling_battles()]
 
     def snapshot():
         held = list(app.store.replays([matcher.HELD]))
@@ -662,7 +668,7 @@ def _review_window(app, refresh_ms=1000):
             side="left", padx=(6, 0))
         _button(btns, "Skip", act(app.eng.skip, md5)).pack(side="left", padx=6)
 
-    def render(held, waiting, shots, settle=(0, None)):
+    def render(held, waiting, shots, settle=(0, None, [])):
         top = body.canvas.yview()[0]
         was_empty = page[0] is not None and not getattr(page[0], "_held", 0)
         if page[0] is not None:
@@ -672,12 +678,25 @@ def _review_window(app, refresh_ms=1000):
         pg.pack(fill="x")
         _set_title(r, _review_title(held))
         body.center = not held and not waiting
-        n_settle, settle_at = settle
-        settle_text = ("%d screenshot%s just taken - %s matched to a battle "
-                       "at %s, in case you take another."
-                       % (n_settle, "" if n_settle == 1 else "s",
-                          "it is" if n_settle == 1 else "they are",
-                          _clock(settle_at))) if n_settle else ""
+        n_settle, settle_at, settle_for = settle
+        settle_text = ""
+        if n_settle:
+            one = n_settle == 1
+            if settle_for:
+                settle_text = ("%d screenshot%s just taken, of %s. %s until "
+                               "%s in case you take another."
+                               % (n_settle, "" if one else "s",
+                                  " and ".join(settle_for),
+                                  "It waits" if one else "They wait",
+                                  _clock(settle_at)))
+            else:
+                settle_text = ("%d screenshot%s just taken. %s until %s in "
+                               "case you take another, then %s matched to a "
+                               "battle."
+                               % (n_settle, "" if one else "s",
+                                  "It waits" if one else "They wait",
+                                  _clock(settle_at),
+                                  "it is" if one else "they are"))
         if not held and not waiting:
             _label(pg, "Nothing to review.", size=13, bold=True,
                    wraplength=520, justify="center").pack()
