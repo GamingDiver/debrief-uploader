@@ -391,3 +391,64 @@ class BattleGroupTest(unittest.TestCase):
         from debrief_uploader.matcher import battle_group
         self.assertEqual(battle_group({"matchGroup": "pvp"}), "pvp")
         self.assertEqual(battle_group({}), "")
+
+
+class BattleTypeTest(unittest.TestCase):
+    """The battle-type setting (2026-11-13): every match group seen in real
+    replays maps onto one of its five keys; training rooms and groups no one
+    has seen yet are not covered, so a new game mode is never dropped."""
+
+    def test_every_group_seen_in_real_replays(self):
+        from debrief_uploader.matcher import battle_type, TRAINING
+        seen = {"pvp": "pvp", "ranked": "ranked",
+                "clan_elimination_cup": "clan", "clan": "clan",
+                "cooperative": "coop", "pve": "events",
+                "war_tales_event": "events", "arcade": "events",
+                "event_alpha": "events", TRAINING: None}
+        for group, kind in seen.items():
+            self.assertEqual(battle_type(group), kind, group)
+
+    def test_case_and_unknown_groups(self):
+        from debrief_uploader.matcher import battle_type
+        self.assertEqual(battle_type("PvP"), "pvp")
+        self.assertEqual(battle_type("Cooperative"), "coop")
+        self.assertIsNone(battle_type("brand_new_mode"))
+        self.assertIsNone(battle_type(""))
+        self.assertIsNone(battle_type(None))
+
+    def test_every_key_is_a_setting(self):
+        from debrief_uploader import config
+        from debrief_uploader.matcher import battle_type
+        for g in ("pvp", "ranked", "clan", "cooperative", "pve"):
+            self.assertIn(battle_type(g), config.ALL_BATTLE_TYPES)
+
+
+class FilteredBattleTest(unittest.TestCase):
+    """A battle whose type is off never takes screenshots -- and the
+    scorecards taken after it are its own, so they must not go to the older
+    battle still waiting for scorecards."""
+
+    def test_scorecards_after_a_filtered_battle_go_nowhere(self):
+        from debrief_uploader.matcher import FILTERED
+        rs = [replay("A", 10), replay("C", 13, group="cooperative", state=FILTERED)]
+        d = match_cluster(one_cluster([14, 14.1]), rs, cfg())
+        self.assertEqual(d.kind, NONE)
+        self.assertIsNone(d.replay)
+        self.assertIn("off in Settings", d.reason)
+
+    def test_positive_control_without_the_filtered_battle(self):
+        # the same shots with no co-op battle in between go to A: the refusal
+        # above is the filtered battle's doing
+        d = match_cluster(one_cluster([14, 14.1]), [replay("A", 10)], cfg())
+        self.assertEqual((d.kind, d.replay.key), (AUTO, "A"))
+
+    def test_an_older_filtered_battle_does_not_block_a_later_one(self):
+        from debrief_uploader.matcher import FILTERED
+        rs = [replay("C", 5, group="cooperative", state=FILTERED), replay("A", 10)]
+        d = match_cluster(one_cluster([11, 11.1]), rs, cfg())
+        self.assertEqual((d.kind, d.replay.key), (AUTO, "A"))
+
+    def test_a_filtered_battle_is_never_an_orphan(self):
+        from debrief_uploader.matcher import FILTERED
+        r = replay("C", 0, group="cooperative", state=FILTERED)
+        self.assertFalse(is_orphan(r, [r], T0 + 3 * 3600, cfg()))

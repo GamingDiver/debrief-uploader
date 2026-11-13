@@ -126,5 +126,61 @@ class TestFirstRunFlag(unittest.TestCase):
         self.assertEqual(again["watching_since"], 1000.0)
 
 
+class TestBattleTypeSetting(unittest.TestCase):
+    """Which battle types upload (2026-11-13). A new install starts with
+    real-player battles only; an install from before the setting keeps every
+    type (no silent change) and is pointed at the setting once."""
+
+    def setUp(self):
+        self.home = tempfile.mkdtemp()
+        os.environ["GD_UPLOADER_HOME"] = self.home
+
+    def tearDown(self):
+        os.environ.pop("GD_UPLOADER_HOME", None)
+        shutil.rmtree(self.home, ignore_errors=True)
+
+    def test_new_install_uploads_real_player_battles_only(self):
+        s = config.Settings.load()
+        self.assertEqual(config.battle_types_on(s), {"pvp", "ranked", "clan"})
+        self.assertFalse(s["battle_types_notice"])
+
+    def test_install_from_before_the_setting_keeps_every_type(self):
+        with open(config.settings_path(), "w") as f:
+            json.dump({"replay_dirs": ["r"], "shot_dirs": ["s"],
+                       "watching_confirmed": True}, f)
+        s = config.Settings.load()
+        self.assertEqual(config.battle_types_on(s), set(config.ALL_BATTLE_TYPES))
+        self.assertTrue(s["battle_types_notice"], "point them at the setting once")
+
+    def test_a_saved_choice_is_kept_and_the_notice_stays_cleared(self):
+        s = config.Settings.load()
+        s["upload_battle_types"] = ["pvp", "coop"]
+        s["battle_types_notice"] = False
+        s.save()
+        again = config.Settings.load()
+        self.assertEqual(config.battle_types_on(again), {"pvp", "coop"})
+        self.assertFalse(again["battle_types_notice"])
+
+    def test_turning_everything_off_is_a_choice_not_a_reset(self):
+        s = config.Settings.load()
+        s["upload_battle_types"] = []
+        s.save()
+        self.assertEqual(config.battle_types_on(config.Settings.load()), set())
+
+    def test_a_hand_edited_value_means_every_type(self):
+        with open(config.settings_path(), "w") as f:
+            json.dump({"upload_battle_types": "pvp"}, f)
+        self.assertEqual(config.battle_types_on(config.Settings.load()),
+                         set(config.ALL_BATTLE_TYPES))
+        self.assertEqual(config.battle_types_on({"upload_battle_types": ["pvp", "nope"]}),
+                         {"pvp"})
+
+    def test_settings_do_not_share_the_default_list(self):
+        a, b = config.Settings(), config.Settings()
+        a["upload_battle_types"].append("coop")
+        self.assertNotIn("coop", b["upload_battle_types"])
+        self.assertNotIn("coop", config.DEFAULTS["upload_battle_types"])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

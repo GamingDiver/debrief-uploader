@@ -458,6 +458,71 @@ class TestWindowsBuild(unittest.TestCase):
         self.assertEqual(fresh.get("visibility"), "private")
         self.assertTrue(fresh.get("review_mode"))
 
+    def test_battle_type_checkboxes_save_as_they_change(self):
+        """The battle-type setting (2026-11-13): ticking Co-op and unticking
+        PvP in the window is what reaches the disk."""
+        import tkinter as tk
+        from debrief_uploader import config
+        real_root = self._real_root
+
+        def walk(w):
+            yield w
+            for c in w.winfo_children():
+                yield from walk(c)
+
+        def root(title, w, h):
+            r = real_root(title, w, h)
+
+            def act():
+                boxes = {x.cget("text"): x for x in walk(r)
+                         if isinstance(x, tk.Checkbutton)}
+                for text, _key in ((lbl, k) for k, lbl in config.BATTLE_TYPES):
+                    assert text in boxes, "no checkbox for %s" % text
+                boxes["Co-op"].invoke()
+                boxes["PvP (Standard)"].invoke()
+                r.tk.call(r.protocol("WM_DELETE_WINDOW"))
+            r.after(150, act)
+            r.after(4000, lambda: r.winfo_exists() and r.destroy())
+            return r
+
+        self.ui.core._root = root
+        self.ui.open_settings(self.app)
+        self.assertEqual(self.errors, [])
+        self.assertEqual(config.Settings.load()["upload_battle_types"],
+                         ["ranked", "clan", "coop"])
+
+    def test_battle_types_notice_shows_once(self):
+        """An install from before the setting is shown it once: the banner
+        is in the window, and opening the window clears it."""
+        import tkinter as tk
+        from debrief_uploader import config
+        real_root = self._real_root
+        seen = {}
+
+        def walk(w):
+            yield w
+            for c in w.winfo_children():
+                yield from walk(c)
+
+        def root(title, w, h):
+            r = real_root(title, w, h)
+
+            def look():
+                seen["labels"] = [x.cget("text") for x in walk(r)
+                                  if isinstance(x, tk.Label)]
+                r.destroy()
+            r.after(150, look)
+            return r
+
+        self.app.s["watching_confirmed"] = True
+        self.app.s["battle_types_notice"] = True
+        self.ui.core._root = root
+        self.ui.open_settings(self.app)
+        self.assertEqual(self.errors, [])
+        self.assertIn("NEW: CHOOSE WHICH BATTLE TYPES UPLOAD", seen["labels"])
+        self.assertFalse(self.app.s["battle_types_notice"])
+        self.assertFalse(config.Settings.load()["battle_types_notice"])
+
     @unittest.skipUnless(os.name == "nt", "our own title bar is Windows-only")
     def test_title_bar_close_saves_like_the_native_x(self):
         """winframe draws the title bar, so its X must run the same

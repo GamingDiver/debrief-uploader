@@ -89,7 +89,38 @@ DEFAULTS = {
     # user's decision to use the app, so it was never theirs to upload by
     # accident (Greg 2026-10-07).
     "watching_since": None,
+    # Which battle types upload (keys of BATTLE_TYPES). A battle of a type
+    # that is off is identified and then left alone: no row on the site, no
+    # screenshots. New installs start with real-player battles only; an
+    # install from before this setting keeps every type (Settings.load) and
+    # is shown the setting once (battle_types_notice).
+    "upload_battle_types": ["pvp", "ranked", "clan"],
+    "battle_types_notice": False,
 }
+
+# The battle types the user can turn off, in the order Settings lists them.
+# matcher.battle_type() maps a replay's matchGroup onto these keys.
+BATTLE_TYPES = (
+    ("pvp", "PvP (Standard)"),
+    ("ranked", "Ranked"),
+    ("clan", "Clan and fleet battles"),
+    ("coop", "Co-op"),
+    ("events", "Events and PvE scenarios"),
+)
+ALL_BATTLE_TYPES = [k for k, _label in BATTLE_TYPES]
+
+
+def battle_types_on(settings):
+    """The battle types that upload. A value that is not a list (a hand-edited
+    settings file) means every type, the behaviour before the setting existed."""
+    v = settings.get("upload_battle_types")
+    if not isinstance(v, (list, tuple)):
+        return set(ALL_BATTLE_TYPES)
+    return {k for k in v if k in ALL_BATTLE_TYPES}
+
+
+def battle_type_label(kind):
+    return dict(BATTLE_TYPES).get(kind, kind or "unknown")
 
 OLD_SHOT_MIN_KB = 1000
 
@@ -296,6 +327,9 @@ class Settings(dict):
             self.update({k: v for k, v in data.items() if v is not None or k == "visibility"})
         for k in ("replay_dirs", "shot_dirs", "exclude_dirs"):
             self[k] = dedupe_dirs(self[k])
+        if isinstance(self.get("upload_battle_types"), (list, tuple)):
+            # its own list: the default one is shared with DEFAULTS
+            self["upload_battle_types"] = list(self["upload_battle_types"])
 
     @classmethod
     def load(cls):
@@ -313,6 +347,12 @@ class Settings(dict):
         # anyone still on it to the new default.
         if isinstance(data, dict) and data.get("shot_min_kb") == OLD_SHOT_MIN_KB:
             data["shot_min_kb"] = DEFAULTS["shot_min_kb"]
+        # An install from before the battle-type setting uploaded every
+        # type. It keeps doing so until the user changes it -- no silent
+        # change -- and is pointed at the new setting once.
+        if isinstance(data, dict) and "upload_battle_types" not in data:
+            data["upload_battle_types"] = list(ALL_BATTLE_TYPES)
+            data["battle_types_notice"] = True
         s = cls(data)
         if s.get("watching_confirmed") and not s.get("watching_since"):
             # Upgrading install: start the cutoff now. What it already

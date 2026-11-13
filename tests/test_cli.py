@@ -117,5 +117,44 @@ class TestTrayStartupReportsTheSame(unittest.TestCase):
                       "the tray path must warn that scorecards can never match")
 
 
+class TestBattleTypesOption(unittest.TestCase):
+    """setup --battle-types (2026-11-13)."""
+
+    def test_parse(self):
+        from debrief_uploader import cli, config
+        self.assertEqual(cli.parse_battle_types("pvp, coop,pvp"), ["pvp", "coop"])
+        self.assertEqual(cli.parse_battle_types("ALL"), config.ALL_BATTLE_TYPES)
+        self.assertEqual(cli.parse_battle_types("none"), [])
+        with self.assertRaises(ValueError) as e:
+            cli.parse_battle_types("pvp,coop-op")
+        self.assertIn("events", str(e.exception), "the error names the choices")
+
+    def test_setup_sets_it_and_clears_the_notice(self):
+        import io
+        import json
+        import shutil
+        import tempfile
+        from contextlib import redirect_stdout
+        from debrief_uploader import cli, config
+        home = tempfile.mkdtemp()
+        os.environ["GD_UPLOADER_HOME"] = home
+        try:
+            with open(config.settings_path(), "w") as f:     # from before the setting
+                json.dump({"replay_dirs": [home], "shot_dirs": [home]}, f)
+            out = io.StringIO()
+            with redirect_stdout(out):
+                rc = cli.main(["setup", "--battle-types", "pvp,ranked"])
+            self.assertEqual(rc, 0)
+            s = config.Settings.load()
+            self.assertEqual(config.battle_types_on(s), {"pvp", "ranked"})
+            self.assertFalse(s["battle_types_notice"])
+            self.assertIn("[ ] Co-op", out.getvalue())
+            with redirect_stdout(io.StringIO()):
+                self.assertEqual(cli.main(["setup", "--battle-types", "nope"]), 2)
+        finally:
+            os.environ.pop("GD_UPLOADER_HOME", None)
+            shutil.rmtree(home, ignore_errors=True)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

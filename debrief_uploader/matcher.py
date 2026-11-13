@@ -33,6 +33,10 @@ UPLOADED = "uploaded"
 ORPHAN = "orphan"                # gave up waiting for scorecards
 FAILED = "failed"
 SKIPPED = "skipped"
+# Its battle type is off in Settings: identified, never uploaded, and it never
+# takes screenshots -- but it still ended the session's latest battle, so the
+# scorecards taken after it are its own and must not go to an older battle.
+FILTERED = "filtered"
 
 # States a cluster may attach to. A replay that is already uploading, uploaded,
 # held or orphaned is not up for grabs (spec condition B).
@@ -61,6 +65,30 @@ def battle_group(meta):
                               for v in meta.get("vehicles") or []):
         return TRAINING
     return group
+
+
+def battle_type(group):
+    """The battle-type setting (config.BATTLE_TYPES) a match group falls
+    under, or None for a group the setting does not cover.
+
+    Groups seen in real replays: pvp, ranked, clan_elimination_cup,
+    cooperative, pve, war_tales_event, arcade, event_alpha, training_room.
+    Training rooms keep their own setting (training_visibility), and a group
+    this table has never seen is not filtered: a new game mode is never
+    dropped silently just because it is new."""
+    g = (group or "").lower()
+    if g == "pvp":
+        return "pvp"
+    if g.startswith("ranked"):
+        return "ranked"
+    if g.startswith("clan"):
+        return "clan"
+    if g.startswith("coop") or g == "cooperative":
+        return "coop"
+    if (g in ("pve", "arcade") or "event" in g
+            or g.startswith(("war_tales", "scenario", "operation"))):
+        return "events"
+    return None
 
 
 @dataclass
@@ -201,6 +229,16 @@ def match_cluster(cluster, replays, cfg):
         return Decision(NONE, reason="no battle had finished when these were taken")
 
     best = max(cands, key=lambda r: r.t_close)
+
+    # A battle whose type is off in Settings never takes screenshots, but if
+    # it is the latest battle to have finished, these are ITS scorecards.
+    # Refuse rather than skip past it onto an older battle, as for a
+    # training room.
+    off = [r for r in replays if r.state == FILTERED
+           and best.t_close < r.t_close <= t0 + cfg["grace"]]
+    if off:
+        return Decision(NONE, reason="the last battle's type is off in Settings, "
+                                     "so these are not uploaded")
 
     # A training room has no post-battle scorecard screens at all, so these
     # shots are not of it -- and they are not of the battle before it either.
@@ -359,6 +397,9 @@ def _named_by_screen(cluster, r, screen, cfg):
     when = _hhmm(screen)
     if r.is_training:
         return Decision(NONE, reason="the battle time names a training room")
+    if r.state == FILTERED:
+        return Decision(NONE, reason="the battle time names a battle whose type "
+                                     "is off in Settings (%s)" % when)
     if r.hand_picked:
         return Decision(NONE, reason="these are of a battle whose screenshots "
                                      "you chose yourself (%s)" % when)

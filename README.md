@@ -165,7 +165,7 @@ icon should appear in the tray on its own.
 | **Sign in...** | shown until you are signed in; nothing uploads before then |
 | **Review (n)** | resolve anything it would not guess at |
 | **Status...** | what it has seen and uploaded, with links |
-| **Settings...** | account, folders, visibility, review mode, scan limits, start-at-logon |
+| **Settings...** | account, folders, visibility, battle types, review mode, scan limits, start-at-logon |
 | **Why isn't it uploading?** | the full diagnosis, same as `Debrief.cmd doctor` |
 | **Check now** | don't wait out the poll interval |
 | **Pause / Resume**, **Quit** | |
@@ -269,6 +269,7 @@ python -m debrief_uploader review     resolve anything it wasn't sure about
 python -m debrief_uploader run        watch and upload (add --tray for the tray icon)
 python -m debrief_uploader setup      show or set the folders it watches
                                       (--exclude-dir to never read a folder,
+                                      --battle-types to choose which battles upload,
                                       --start to begin watching from now)
 python -m debrief_uploader login      sign in in the browser (--provider google|discord, or --email)
 python -m debrief_uploader logout     sign out and forget the tokens
@@ -292,7 +293,8 @@ old; only the scorecard-checked figures are missing.
    running is kept but **not sent anywhere** until you approve it in
    **Review**.
 2. Asks the site what the battle was (the replay is encrypted; the app never
-   holds the key).
+   holds the key). A battle of a type you turned off stops here: nothing more
+   about it is sent (see [Battle types](#battle-types)).
 3. Groups your screenshots into per-battle bursts and matches each burst to the
    battle it followed. It also reads the battle time every result screen
    prints under the mode/map line (`09.11.2026 21:43`), so screenshots of
@@ -389,6 +391,26 @@ kept). Then:
 
 A PC clock that is hours or days off does not stop this from working; the
 time then simply decides nothing.
+
+### Battle types
+
+Choose which battles upload under **Settings... → Uploads → Battle types to
+upload**: PvP (Standard), Ranked, Clan and fleet battles, Co-op, and Events and
+PvE scenarios. A new install uploads PvP, Ranked and Clan battles; Co-op and
+event battles stay on this PC. If you used the uploader before this setting
+existed, every type still uploads, as before, until you change it.
+
+The uploader only learns a battle's type when the site identifies the replay
+(step 2 above), so that one request is still made. After it, a battle of a
+type that is off is never uploaded, and the scorecards you took for it are
+left alone rather than given to another battle. A battle from before the
+uploader was running that you approve in **Review** follows the same
+setting. Training rooms follow their own setting (below), and a game mode
+the uploader does not know yet always uploads, so a new mode is never
+dropped silently.
+
+From the command line: `Debrief.cmd setup --battle-types pvp,ranked,clan`
+(any of `pvp`, `ranked`, `clan`, `coop`, `events`, or `all` / `none`).
 
 ### Training rooms
 

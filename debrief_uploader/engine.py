@@ -10,8 +10,8 @@ import time
 from . import (api, config, images, matcher, names, screenocr, screentime,
                uploader, watcher)
 from .api import ApiError
-from .matcher import (AWAITING_SHOTS, Cluster, HELD, NEW, ORPHAN, READY,
-                      ReplayRec, ShotRec, SKIPPED, UPLOADED, UPLOADING)
+from .matcher import (AWAITING_SHOTS, Cluster, FILTERED, HELD, NEW, ORPHAN,
+                      READY, ReplayRec, ShotRec, SKIPPED, UPLOADED, UPLOADING)
 
 # Notes that mark a battle whose screenshots the user picked by hand.
 CHOSEN_NOTE = "screenshots chosen by you"
@@ -311,24 +311,67 @@ class Engine:
                     continue
                 self.log.warn("could not read %s yet (%s)" % (r["filename"], e.message))
                 continue
-            hdr = api.iso_utc(meta.get("dateTime"))
-            hdr_epoch = None
-            if hdr:
-                hdr_epoch = time.mktime(time.strptime(hdr, "%Y-%m-%dT%H:%M:%SZ"))
             group = matcher.battle_group(meta)
             training = group == matcher.TRAINING
+            if self._filter_battle_type(r, meta, group):
+                continue
             self.store.update_replay(
-                r["md5"], header_dt=hdr_epoch, match_group=group,
-                player_ship=meta.get("playerVehicle"),
-                player_name=meta.get("playerName"),
-                map_name=meta.get("mapName"), duration_s=meta.get("duration"),
-                played_at=hdr,
-                state=self._state_after_meta(r, training))
+                r["md5"], state=self._state_after_meta(r, training),
+                **self._meta_fields(meta, group))
             self._check_skew(_rec(self.store.replay(r["md5"])))
             self.log.info("%s: %s on %s%s" % (
                 r["filename"], meta.get("playerVehicle"), meta.get("mapName"),
                 " (training room - no scorecards needed)" if training else ""))
         return len(rows)
+
+    @staticmethod
+    def _meta_fields(meta, group):
+        """What replay-meta tells us, as stored on the replay's row."""
+        hdr = api.iso_utc(meta.get("dateTime"))
+        hdr_epoch = None
+        if hdr:
+            hdr_epoch = time.mktime(time.strptime(hdr, "%Y-%m-%dT%H:%M:%SZ"))
+        return dict(header_dt=hdr_epoch, match_group=group,
+                    player_ship=meta.get("playerVehicle"),
+                    player_name=meta.get("playerName"),
+                    map_name=meta.get("mapName"), duration_s=meta.get("duration"),
+                    played_at=hdr)
+
+    FILTERED_NOTE = "%s battles are off in Settings - not uploaded"
+
+    def _filter_battle_type(self, row, meta, group):
+        """Leave a battle alone when its type is off in Settings.
+
+        The type is only known once replay-meta has identified the battle (the
+        replay is encrypted end to end, so the app cannot read it locally).
+        From there nothing more about it leaves the PC: no row on the site,
+        no screenshots. Returns True when the battle was filtered."""
+        kind = matcher.battle_type(group)
+        if kind is None or kind in config.battle_types_on(self.s):
+            return False
+        label = config.battle_type_label(kind)
+        self.store.update_replay(row["md5"], state=FILTERED,
+                                 note=self.FILTERED_NOTE % label,
+                                 **self._meta_fields(meta, group))
+        self.log.info("%s: %s on %s - %s, which is off in Settings; not uploaded"
+                      % (row["filename"], meta.get("playerVehicle"),
+                         meta.get("mapName"), label))
+        return True
+
+    def _identify_before_upload(self, row):
+        """A battle approved from before the app was running was never
+        identified (nothing left the PC until the user said upload). Identify
+        it now, so its battle type is honoured like any other's. Returns
+        True when it is filtered and must not upload. ApiError propagates to
+        the queue's own handling."""
+        if row["match_group"] is not None or row["remote_id"]:
+            return False
+        meta = uploader.read_meta(self.client, row["staged_path"])
+        group = matcher.battle_group(meta)
+        if self._filter_battle_type(row, meta, group):
+            return True
+        self.store.update_replay(row["md5"], **self._meta_fields(meta, group))
+        return False
 
     def _say_once(self, key, msg, error=False):
         """Say something the user needs to hear, without repeating it every
@@ -594,6 +637,9 @@ class Engine:
         md5 = row["md5"]
         label = self._label(row)
         try:
+            if self._identify_before_upload(row):
+                return 0
+            row = self.store.replay(md5)      # with what identifying it stored
             self.store.update_replay(md5, state=UPLOADING)
             if row["remote_id"] and row["late_shots"]:
                 code = uploader.add_late_shots(self.client, self.store, row,
@@ -897,7 +943,7 @@ class Engine:
         for r in self.store.replays():
             out[r["state"]] = out.get(r["state"], 0) + 1
         for k in (NEW, AWAITING_SHOTS, HELD, READY, UPLOADING, UPLOADED,
-                  ORPHAN, SKIPPED):
+                  ORPHAN, SKIPPED, FILTERED):
             out.setdefault(k, 0)
         return out
 
@@ -934,6 +980,12 @@ class Engine:
                                 time.localtime(self.s["watching_since"])))
         for d in self.s.get("exclude_dirs") or []:
             add("  excluded:  %s" % d)
+        on = config.battle_types_on(self.s)
+        add("  battle types uploaded: %s" % (", ".join(
+            lbl for k, lbl in config.BATTLE_TYPES if k in on) or "NONE"))
+        off = [lbl for k, lbl in config.BATTLE_TYPES if k not in on]
+        if off:
+            add("  battle types NOT uploaded: %s" % ", ".join(off))
         for kind, dirs, exts in (("replays", self.s["replay_dirs"], (".wowsreplay",)),
                                  ("screenshots", self.s["shot_dirs"],
                                   (".png", ".jpg", ".jpeg"))):
@@ -1035,6 +1087,10 @@ class Engine:
         if c[READY] or c[UPLOADING]:
             todo.append("%d upload(s) queued - leave it running"
                         % (c[READY] + c[UPLOADING]))
+        if c[FILTERED]:
+            todo.append("%d battle(s) not uploaded because their type is off "
+                        "(Settings -> Uploads -> Battle types to upload)"
+                        % c[FILTERED])
         if c[UPLOADED]:
             todo.append("%d battle(s) uploaded. If you cannot see one on the "
                         "site, check you are signed in there as the SAME "

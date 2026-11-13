@@ -1194,3 +1194,138 @@ class TestTrainingRoomVisibility(EngineCase):
         for _ in range(4):
             self.eng.tick()
         self.assertEqual(self.client.created_visibility, "public")
+
+
+class TestBattleTypeFilter(EngineCase):
+    """Battle types the user turned off (2026-11-13): identified by
+    replay-meta, then left alone -- no row on the site, no screenshots -- and
+    their scorecards never handed to another battle."""
+
+    def setUp(self):
+        super().setUp()
+        self.groups = {}            # replay bytes -> matchGroup
+        base = self.client.meta
+
+        def replay_meta(raw):
+            self.client.calls.append("meta")
+            return dict(base, matchGroup=self.groups.get(raw, base["matchGroup"]))
+        self.client.replay_meta = replay_meta
+
+    def typed(self, tag, when, group, with_shots=True):
+        self.battle(tag, when, with_shots)
+        with open(os.path.join(self.rdir, "2026_%s.wowsreplay" % tag), "rb") as f:
+            self.groups[f.read()] = group
+
+    def sent(self):
+        return [c for c in self.client.calls if c in ("raw", "rpc:create_replay", "shot")]
+
+    def by_tag(self):
+        return {r["filename"].split("_")[1].split(".")[0]: r for r in self.store.replays()}
+
+    def test_a_new_install_identifies_a_coop_battle_then_leaves_it(self):
+        self.typed("C", time.time() - 100, "cooperative")
+        for _ in range(6):
+            self.eng.tick()
+        row = self.store.replays()[0]
+        self.assertEqual(row["state"], matcher.FILTERED)
+        self.assertIn("Co-op", row["note"])
+        self.assertEqual(row["match_group"], "cooperative")
+        self.assertEqual(self.client.calls.count("meta"), 1)
+        self.assertEqual(self.sent(), [], "nothing beyond identifying it")
+        self.assertEqual(self.store.shots_for(row["md5"]), [])
+
+    def test_event_and_pve_battles_are_off_by_default_too(self):
+        now = time.time()
+        for i, (tag, group) in enumerate((("E", "war_tales_event"), ("P", "pve"),
+                                          ("X", "arcade"))):
+            self.typed(tag, now - 3000 + i * 900, group, with_shots=False)
+        for _ in range(8):
+            self.eng.tick()
+        self.assertEqual({r["state"] for r in self.store.replays()},
+                         {matcher.FILTERED})
+        self.assertEqual(self.sent(), [])
+
+    def test_pvp_ranked_and_clan_still_upload(self):
+        now = time.time()
+        for i, (tag, group) in enumerate((("A", "pvp"), ("R", "ranked"),
+                                          ("K", "clan_elimination_cup"))):
+            self.typed(tag, now - 2000 + i * 600, group)
+        for _ in range(12):
+            self.eng.tick()
+        self.assertEqual({r["state"] for r in self.store.replays()},
+                         {matcher.UPLOADED})
+        self.assertEqual(len(self.client.rows), 3)
+
+    def test_scorecards_after_a_filtered_battle_never_go_to_an_older_one(self):
+        now = time.time()
+        self.typed("A", now - 700, "pvp", with_shots=False)   # no scorecards taken
+        self.typed("C", now - 600, "cooperative")              # its own scorecards
+        for _ in range(8):
+            self.eng.tick()
+        rows = self.by_tag()
+        self.assertEqual(rows["C"]["state"], matcher.FILTERED)
+        self.assertEqual(self.store.shots_for(rows["A"]["md5"]), [],
+                         "the co-op scorecards must not go to the PvP battle")
+        self.assertNotIn("shot", self.client.calls)
+
+    def test_an_install_from_before_the_setting_still_uploads_coop(self):
+        self.s["upload_battle_types"] = list(config.ALL_BATTLE_TYPES)
+        self.typed("C", time.time() - 100, "cooperative")
+        for _ in range(4):
+            self.eng.tick()
+        row = self.store.replays()[0]
+        self.assertEqual(row["state"], matcher.UPLOADED)
+        self.assertEqual(len(self.store.shots_for(row["md5"])), 2)
+
+    def test_an_unknown_mode_is_never_dropped_silently(self):
+        self.s["upload_battle_types"] = []                 # every type off
+        self.typed("N", time.time() - 100, "brand_new_mode")
+        for _ in range(4):
+            self.eng.tick()
+        self.assertEqual(self.store.replays()[0]["state"], matcher.UPLOADED)
+
+    def test_training_rooms_keep_their_own_setting(self):
+        self.s["upload_battle_types"] = []
+        self.typed("T", time.time() - 100, "training_room", with_shots=False)
+        for _ in range(4):
+            self.eng.tick()
+        self.assertEqual(self.store.replays()[0]["state"], matcher.UPLOADED)
+        self.assertEqual(self.client.created_visibility, "private")
+
+    def test_an_approved_battle_from_before_the_app_ran_honours_the_filter(self):
+        del self.eng._watch_start          # the real per-folder clock
+        p = self.make_replay("2026_O.wowsreplay", mtime=time.time() - 3 * 3600)
+        with open(p, "rb") as f:
+            self.groups[f.read()] = "cooperative"
+        self.eng.tick()
+        row = self.store.replays()[0]
+        self.assertEqual((row["backfill"], row["state"]), (1, matcher.HELD))
+        self.assertNotIn("meta", self.client.calls,
+                         "a backfilled battle is not even identified unasked")
+        self.eng.confirm(row["md5"])
+        for _ in range(3):
+            self.eng.tick()
+        row = self.store.replay(row["md5"])
+        self.assertEqual(row["state"], matcher.FILTERED)
+        self.assertEqual(self.client.calls.count("meta"), 1)
+        self.assertEqual(self.sent(), [])
+
+    def test_an_approved_pvp_battle_from_before_the_app_ran_is_identified_once(self):
+        del self.eng._watch_start
+        self.make_replay("2026_Q.wowsreplay", mtime=time.time() - 3 * 3600)
+        self.eng.tick()
+        row = self.store.replays()[0]
+        self.eng.confirm(row["md5"])
+        for _ in range(3):
+            self.eng.tick()
+        self.assertEqual(self.store.replay(row["md5"])["state"], matcher.UPLOADED)
+        self.assertEqual(self.client.calls.count("meta"), 1,
+                         "identified once, not again by the upload")
+
+    def test_doctor_names_the_setting(self):
+        self.typed("C", time.time() - 100, "cooperative")
+        for _ in range(4):
+            self.eng.tick()
+        text = "\n".join(self.eng.diagnose())
+        self.assertIn("battle types NOT uploaded: Co-op, Events and PvE scenarios", text)
+        self.assertIn("1 battle(s) not uploaded because their type is off", text)

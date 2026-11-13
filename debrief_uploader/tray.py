@@ -816,6 +816,10 @@ class Tray:
             # First run: put the folder check in front of the user rather
             # than waiting for them to find it in a tray menu.
             ui.open_settings(self)
+        elif self.s.get("battle_types_notice"):
+            # Once, after the update that added battle types: show where the
+            # setting lives. The window carries the notice and clears it.
+            ui.open_settings(self)
         self.icon.run()
         self._stop.set()
         return 0

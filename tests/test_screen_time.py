@@ -248,6 +248,18 @@ class TestMatcherWithScreenTime(unittest.TestCase):
         self.assertIsNone(d.replay)
         self.assertTrue(d.by_screen)
 
+    def test_the_screen_naming_a_filtered_battle_attaches_nothing(self):
+        """Uploader battle-type filter (2026-11-13): the time on the screen
+        names a battle whose type is off. Its scorecards go nowhere: not to
+        it, and not to any other battle."""
+        self.recs[-1].state = matcher.FILTERED
+        d = matcher.match_by_screen(matcher.Cluster(self.shots[:2]),
+                                    P("09.11.2026 21:43"), None, self.recs, self.cfg)
+        self.assertEqual(d.kind, matcher.NONE)
+        self.assertIsNone(d.replay)
+        self.assertTrue(d.by_screen)
+        self.assertIn("off in Settings", d.reason)
+
     def test_a_clock_days_off_falls_back_to_file_time(self):
         c = matcher.Cluster(self.shots[:2])
         d = matcher.match_by_screen(c, datetime(2026, 11, 5, 22, 3), None,

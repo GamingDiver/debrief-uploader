@@ -2,7 +2,7 @@
 
 import os
 
-from .. import autostart
+from .. import autostart, config
 from . import core
 from .core import (
     AMBER, BG, INK, MUTED,
@@ -50,6 +50,8 @@ class _SettingsWindow:
 
         if not self.s.get("watching_confirmed"):
             self._first_run_gate()
+        elif self.s.get("battle_types_notice"):
+            self._battle_types_notice()
         self._account()
         self._folders()
         self._uploads()
@@ -106,6 +108,29 @@ class _SettingsWindow:
 
         _button(gate, "Start watching", start_watching,
                 primary=True).pack(anchor="w", padx=12, pady=(8, 11))
+
+    # ---- once, after the update that added battle types ----
+    def _battle_types_notice(self):
+        import tkinter as tk
+
+        s = self.s
+        note = tk.Frame(self.outer, bg=PANEL, highlightbackground=AMBER,
+                        highlightthickness=1)
+        note.pack(fill="x", pady=(0, 10))
+        _label(note, "NEW: CHOOSE WHICH BATTLE TYPES UPLOAD", size=8, fg=AMBER,
+               bold=True, bg=PANEL).pack(anchor="w", padx=12, pady=(9, 4))
+        _label(note, "Under Uploads below you can now turn off battle types "
+                     "you don't want on the site, such as Co-op or event "
+                     "battles. Every type still uploads, as before, until "
+                     "you change it.",
+               size=9, bg=PANEL, wraplength=560).pack(
+            anchor="w", padx=12, pady=(0, 11))
+        # shown once: the window that shows it is the notice
+        s["battle_types_notice"] = False
+        try:
+            s.save()
+        except OSError:
+            pass
 
     # ---- account ----
     def _account(self):
@@ -241,6 +266,26 @@ class _SettingsWindow:
                size=8, fg=MUTED, bg=PANEL, wraplength=560).pack(
             anchor="w", padx=12, pady=(0, 8))
 
+        _label(up, "Battle types to upload", size=9, bg=PANEL).pack(
+            anchor="w", padx=12)
+        types = tk.Frame(up, bg=PANEL)
+        types.pack(anchor="w", padx=9, pady=(2, 0))
+        on = config.battle_types_on(s)
+        self.btypes = {}
+        for i, (key, text) in enumerate(config.BATTLE_TYPES):
+            var = tk.BooleanVar(r, value=key in on)
+            tk.Checkbutton(types, text=text, variable=var,
+                           command=lambda: self.save_now(), bg=PANEL, fg=INK,
+                           selectcolor=BG, activebackground=PANEL,
+                           activeforeground=INK, font=("Segoe UI", 9)).grid(
+                row=i // 2, column=i % 2, sticky="w", padx=(0, 18))
+            self.btypes[key] = var
+        _label(up, "A battle of a type that is off is never uploaded, and its "
+                   "scorecards are left alone. Training rooms follow their "
+                   "own setting above.",
+               size=8, fg=MUTED, bg=PANEL, wraplength=560).pack(
+            anchor="w", padx=12, pady=(2, 8))
+
         self.review = review = tk.BooleanVar(r, value=bool(s.get("review_mode")))
         tk.Checkbutton(up, text="Ask me before every upload (review mode)",
                        variable=review, command=lambda: self.save_now(), bg=PANEL, fg=INK, selectcolor=BG,
@@ -320,6 +365,8 @@ class _SettingsWindow:
         s["training_visibility"] = next(
             v for lbl, v in TRAINING_VISIBILITY if lbl == self.tvis.get())
         s["review_mode"] = bool(self.review.get())
+        s["upload_battle_types"] = [k for k, _t in config.BATTLE_TYPES
+                                    if self.btypes[k].get()]
         try:
             s["shot_max_age_hours"] = max(1, int(self.age.get()))
             s["shot_min_kb"] = max(0, int(self.minkb.get()))

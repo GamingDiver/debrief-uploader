@@ -26,7 +26,33 @@ STATE_LABEL = {
     matcher.ORPHAN: "no scorecards",
     matcher.FAILED: "failed",
     matcher.SKIPPED: "skipped",
+    matcher.FILTERED: "type off in Settings",
 }
+
+BATTLE_TYPES_NOTICE = (
+    "New: you can choose which battle types upload (Settings -> Uploads -> "
+    "Battle types to upload, or 'Debrief.cmd setup --battle-types'). "
+    "Every type still uploads, as before, until you change it.")
+
+
+def parse_battle_types(text):
+    """'pvp,ranked' / 'all' / 'none' -> the setting's list. Raises ValueError
+    naming the choices on anything else."""
+    t = (text or "").strip().lower()
+    if t == "all":
+        return list(config.ALL_BATTLE_TYPES)
+    if t == "none":
+        return []
+    out = []
+    for k in (x.strip() for x in t.split(",")):
+        if not k:
+            continue
+        if k not in config.ALL_BATTLE_TYPES:
+            raise ValueError("unknown battle type %r: choose from %s, or all / none"
+                             % (k, ", ".join(config.ALL_BATTLE_TYPES)))
+        if k not in out:
+            out.append(k)
+    return out
 
 
 def _boot(echo=True):
@@ -60,6 +86,13 @@ def cmd_setup(args):
     if args.exclude_dir:
         s["exclude_dirs"] = config.dedupe_dirs(
             s["exclude_dirs"] + [os.path.normpath(d) for d in args.exclude_dir])
+    if args.battle_types is not None:
+        try:
+            s["upload_battle_types"] = parse_battle_types(args.battle_types)
+        except ValueError as e:
+            print(str(e))
+            return 2
+        s["battle_types_notice"] = False
     s.save()
     print("Replay folders:")
     for d in s["replay_dirs"] or ["  (none found -- pass --replay-dir)"]:
@@ -70,6 +103,10 @@ def cmd_setup(args):
     print("Excluded (never read):")
     for d in s["exclude_dirs"] or ["(none)"]:
         print("  %s" % d)
+    on = config.battle_types_on(s)
+    print("Battle types uploaded:")
+    for k, lbl in config.BATTLE_TYPES:
+        print("  [%s] %-26s (%s)" % ("x" if k in on else " ", lbl, k))
     print("\nState and staged replays: %s" % config.app_dir())
     if not s["replay_dirs"] or not s["shot_dirs"]:
         return 1
@@ -298,6 +335,11 @@ def cmd_run(args):
                 log.info(fixed)
             return tray.run(s, store, client, log)
 
+        if s.get("battle_types_notice"):
+            # no window to show it in: say it once in the log, then let it go
+            log.warn(BATTLE_TYPES_NOTICE)
+            s["battle_types_notice"] = False
+            s.save()
         eng = Engine(s, store, client, log)
         try:
             while True:
@@ -334,6 +376,9 @@ def main(argv=None):
                    help="never read anything inside this folder")
     q.add_argument("--start", action="store_true",
                    help="the folders are right: start watching from now")
+    q.add_argument("--battle-types", metavar="LIST",
+                   help="which battle types upload: a comma list of %s, or "
+                        "all / none" % ",".join(config.ALL_BATTLE_TYPES))
     q.set_defaults(fn=cmd_setup)
 
     q = sub.add_parser("login", help="sign in")
