@@ -19,6 +19,46 @@ from debrief_uploader.state import Store
 from tests.test_cli import FakeClient
 
 
+class TestBlockedTitle(unittest.TestCase):
+    """The tray title is also its tooltip, which Windows cuts at 127
+    characters; a refusal can be a paragraph (the free upload allowance)."""
+
+    def _title(self, blocked, code):
+        class Eng:
+            pass
+        eng = Eng()
+        eng.blocked, eng.blocked_code = blocked, code
+
+        class Sess:
+            signed_in = True
+
+        class Client:
+            session = Sess()
+
+        class Fake:
+            s = {"watching_confirmed": True}
+            client = Client()
+            paused = False
+        fake = Fake()
+        fake.eng = eng
+        return tray.Tray._title(fake)
+
+    def test_the_allowance_refusal_gets_a_short_title(self):
+        t = self._title("We're happy you're enjoying the Debrief feature. " * 6,
+                        "replay_quota_exceeded")
+        self.assertLessEqual(len(t), 127)
+        self.assertIn("subscribe", t)
+
+    def test_any_long_refusal_fits_the_tooltip(self):
+        t = self._title("x" * 400, "something_else")
+        self.assertLessEqual(len(t), 127)
+        self.assertTrue(t.endswith("..."))
+
+    def test_a_short_refusal_is_shown_as_is(self):
+        self.assertEqual(self._title("Sign in to upload.", "not_authenticated"),
+                         "Debrief Uploader - Sign in to upload.")
+
+
 class TestTrayActions(unittest.TestCase):
 
     def test_every_menu_action_exists(self):

@@ -108,6 +108,32 @@ class TestStorageReplace(unittest.TestCase):
             api._raise_for(500, b'{"message":"boom"}')
         self.assertFalse(cm.exception.permission)
 
+    # The free upload allowance (site, 2026-11-13): create_replay refuses
+    # with RAISE 'replay_quota_exceeded' USING HINT '<the site's words>'.
+    QUOTA = (b'{"code":"P0001","details":null,'
+             b'"hint":"You\'ve used your 5 free uploads. Thank you!",'
+             b'"message":"replay_quota_exceeded"}')
+
+    def test_a_refusal_shows_the_sites_own_words(self):
+        with self.assertRaises(ApiError) as cm:
+            api._raise_for(400, self.QUOTA)
+        e = cm.exception
+        self.assertEqual(e.code, "replay_quota_exceeded")
+        self.assertTrue(e.terminal, "retrying a spent allowance is pointless")
+        self.assertEqual(e.message, "You've used your 5 free uploads. Thank you!")
+
+    def test_without_a_hint_the_apps_words_stay(self):
+        with self.assertRaises(ApiError) as cm:
+            api._raise_for(400, b'{"message":"replay_quota_exceeded"}')
+        self.assertEqual(cm.exception.message, api.USER_MESSAGES["replay_quota_exceeded"])
+        self.assertNotIn("—", cm.exception.message)
+
+    def test_a_hint_never_rewrites_a_retryable_error(self):
+        with self.assertRaises(ApiError) as cm:
+            api._raise_for(500, b'{"message":"boom","hint":"something else"}')
+        self.assertFalse(cm.exception.terminal)
+        self.assertEqual(cm.exception.message, "boom")
+
 
 class TestTokenAfterClockChange(unittest.TestCase):
     """Greg 2026-10-28: a token refreshed while the PC clock ran four days

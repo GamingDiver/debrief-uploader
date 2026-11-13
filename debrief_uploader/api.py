@@ -47,8 +47,14 @@ USER_MESSAGES = {
         "Debrief upload is in supporter early access. Supporters can upload now.",
     "feature_admin_only":
         "Debrief upload is not open to this account yet.",
+    # The site sends its own wording in the refusal's hint (shown instead, see
+    # _raise_for); this is the fallback for an older server.
     "replay_quota_exceeded":
-        "This account has used its replay upload allowance.",
+        "We're happy you're enjoying the Debrief feature. As you can imagine, "
+        "it was difficult to build and is computationally expensive to run. "
+        "You've used your free uploads, so please subscribe at "
+        "gamingdiver.com/supporter and help the site before uploading more. "
+        "Thank you!",
     "not_authenticated": "Sign in to upload.",
     "bad_magic": "That file is not a replay.",
     "bad_file": "That replay looks truncated.",
@@ -104,7 +110,12 @@ def _raise_for(status, body):
     j = _json(body) or {}
     code = ""
     msg = ""
+    hint = ""
     if isinstance(j, dict):
+        # PostgREST passes a RAISE ... USING HINT through as "hint": the
+        # site's own words for a refusal (the free upload allowance), so the
+        # text can change without a new app release
+        hint = j.get("hint") if isinstance(j.get("hint"), str) else ""
         err = j.get("error")
         if isinstance(err, dict):
             code, msg = err.get("code", ""), err.get("message", "")
@@ -119,8 +130,8 @@ def _raise_for(status, body):
     # A permission refusal will refuse again in thirty seconds, and again all
     # night. Surface it instead of hiding it inside a retry loop.
     permission = status in (401, 403) or "row-level security" in msg.lower()
-    err = ApiError(code, USER_MESSAGES.get(code, msg), status,
-                   terminal=code in TERMINAL_CODES)
+    text = hint.strip() if (code in TERMINAL_CODES and hint.strip()) else USER_MESSAGES.get(code, msg)
+    err = ApiError(code, text, status, terminal=code in TERMINAL_CODES)
     err.permission = permission
     raise err
 

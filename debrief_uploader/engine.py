@@ -40,6 +40,7 @@ class Engine:
         self.pacer = uploader.Pacer(settings["min_upload_gap"],
                                     settings["max_uploads_per_hour"])
         self.blocked = None          # terminal error message; queue is parked
+        self.blocked_code = None     # its ApiError code (the tray words some)
         self.started = time.time()
         self._first_scan = True
         self._dir_since = {}         # folder -> when this run first scanned it
@@ -675,6 +676,7 @@ class Engine:
                               % (label, e.message))
             elif e.terminal:
                 self.blocked = e.message
+                self.blocked_code = e.code
                 self.store.update_replay(md5, state=state, attempts=attempts,
                                          last_error=e.message)
                 self.log.error("stopped: %s" % e.message)
@@ -836,6 +838,7 @@ class Engine:
 
     def unblock(self):
         self.blocked = None
+        self.blocked_code = None
 
     # ---- one pass ---------------------------------------------------------
     CLOCK_SLACK = 600

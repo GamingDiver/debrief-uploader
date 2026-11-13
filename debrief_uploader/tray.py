@@ -29,6 +29,13 @@ ATTN = (0xa8, 0x41, 0x0e)
 # both variants reach into private pystray members.
 CUSTOM_MENU = True
 
+
+def _short(text, limit=90):
+    """One line for the tray title: Windows cuts a tooltip at 127 characters
+    and "Debrief Uploader - " takes 19 of them."""
+    text = " ".join(str(text or "").split())
+    return text if len(text) <= limit else text[:limit - 3].rstrip() + "..."
+
 _BASE = None
 _NO_LOGO = object()
 
@@ -594,7 +601,12 @@ class Tray:
         if not self.client.session.signed_in:
             return "Debrief Uploader - not signed in"
         if self.eng.blocked:
-            return "Debrief Uploader - %s" % self.eng.blocked
+            # The title is also the tray tooltip, which Windows cuts at 127
+            # characters. The free-allowance refusal is a paragraph (shown in
+            # full under Status...), so it gets a short line of its own.
+            if getattr(self.eng, "blocked_code", None) == "replay_quota_exceeded":
+                return "Debrief Uploader - free uploads used: subscribe to upload more"
+            return "Debrief Uploader - %s" % _short(self.eng.blocked)
         if self.paused:
             return "Debrief Uploader - paused"
         held, queued, waiting = self._counts()
@@ -660,6 +672,7 @@ class Tray:
                     self.log.error(e.message)
                     if e.terminal:
                         self.eng.blocked = e.message
+                        self.eng.blocked_code = e.code
                 except Exception as e:
                     self.log.error("unexpected: %s" % e)
             # _refresh touches the store and the tray API, both of which can

@@ -349,6 +349,7 @@ def cmd_run(args):
                     log.error(e.message)
                     if e.terminal:
                         eng.blocked = e.message
+                        eng.blocked_code = e.code
                 except Exception as e:          # never die on one bad tick
                     log.error("unexpected: %s" % e)
                 if args.once:
